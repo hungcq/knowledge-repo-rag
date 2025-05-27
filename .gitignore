@@ -1,6 +1,5 @@
 /.env
-/.idea/.gitignore
-/.idea/knowledge-repo-rag.iml
-/.idea/misc.xml
-/.idea/modules.xml
-/.idea/vcs.xml
+/.idea
+/node_modules
+/frontend/node_modules
+*.iml
