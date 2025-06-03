@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: knowledge-repo-rag-config
+data:
+  VECTOR_STORE_ID: vs_683f2a04c0748191a65d91c2f414c755
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: knowledge-repo-rag
+  labels:
+    app: knowledge-repo-rag
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: knowledge-repo-rag
+  template:
+    metadata:
+      labels:
+        app: knowledge-repo-rag
+    spec:
+      containers:
+      - name: knowledge-repo-rag
+        image: hungcq/knowledge-repo-rag:latest
+        ports:
+        - containerPort: 1918
+        envFrom:
+        - configMapRef:
+            name: knowledge-repo-rag-config
+        - secretRef:
+            name: knowledge-repo-rag-secrets
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: knowledge-repo-rag-ingress
+spec:
+  rules:
+    - host: knowledge-repo-rag-api.hungcq.xyz
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: knowledge-repo-rag
+                port:
+                  number: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: knowledge-repo-rag
+spec:
+  selector:
+    app: knowledge-repo-rag
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 1918
+  type: ClusterIP 
