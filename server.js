@@ -60,23 +60,23 @@ io.on('connection', async (socket) => {
             const {text} = event.content[0];
             const {annotations} = text;
             let output = text.value
-            // if (!annotations) {
-            //   socket.emit('message', output);
-            //   return;
-            // }
-            //
-            // let index = 0;
-            // for (let annotation of annotations) {
-            //   output = output.replace(annotation.text, '[' + index + ']');
-            //   const {file_citation} = annotation;
-            //   if (file_citation) {
-            //     const citedFile = await openai.files.retrieve(
-            //         file_citation.file_id);
-            //     output = output.replace('[' + index + ']',
-            //         ' (source: ' + citedFile.filename + ')');
-            //   }
-            //   index++;
-            // }
+            if (!annotations) {
+              socket.emit('message', output);
+              return;
+            }
+
+            let index = 0;
+            for (let annotation of annotations) {
+              output = output.replace(annotation.text, '[' + index + ']');
+              const {file_citation} = annotation;
+              if (file_citation) {
+                const citedFile = await openai.files.retrieve(
+                    file_citation.file_id);
+                output = output.replace('[' + index + ']',
+                    ' (source: ' + citedFile.filename + ')');
+              }
+              index++;
+            }
             socket.emit('message', output);
           });
     } catch (error) {
