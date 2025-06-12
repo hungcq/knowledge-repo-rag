@@ -16,7 +16,7 @@ const Chat = () => {
   const socket = useRef(null);
 
   useEffect(() => {
-    socket.current = io('wss://knowledge-repo-rag-api.hungcq.xyz');
+    socket.current = io('wss://api.knowledge-repo-rag.hungcq.com');
 
     socket.current.on('message', (content) => {
       setMessages((prev) => {

@@ -36,28 +36,7 @@ fi
 echo "📤 Uploading files to S3..."
 aws s3 sync $DIST_DIR s3://$BUCKET_NAME \
     --region $REGION \
-    --delete \
-    --cache-control "max-age=31536000,public" \
-    --exclude "*.html" \
-    --exclude "*.json" \
-    --exclude "*.xml"
-
-# Upload HTML files with different cache control
-echo "📤 Uploading HTML files..."
-aws s3 sync $DIST_DIR s3://$BUCKET_NAME \
-    --region $REGION \
-    --delete \
-    --cache-control "no-cache" \
-    --include "*.html"
-
-# Upload JSON and XML files with different cache control
-echo "📤 Uploading JSON and XML files..."
-aws s3 sync $DIST_DIR s3://$BUCKET_NAME \
-    --region $REGION \
-    --delete \
-    --cache-control "no-cache" \
-    --include "*.json" \
-    --include "*.xml"
+    --delete
 
 echo -e "${GREEN}✅ Deployment completed successfully!${NC}"
 echo -e "${GREEN}🌐 Your website is available at: http://$BUCKET_NAME.s3-website-$REGION.amazonaws.com${NC}" 
