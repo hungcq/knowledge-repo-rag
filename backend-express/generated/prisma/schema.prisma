@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Book {
+  id         Int      @id(map: "book_pkey") @default(autoincrement())
+  title      String   @db.VarChar(255)
+  author     String   @db.VarChar(255)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("books")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model Message {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  session_id String   @db.Uuid
+  role       String
+  content    String
+  tokens     Int?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  idx        BigInt   @default(autoincrement())
+  meta       Json     @default("{}")
+  sessions   Session  @relation(fields: [session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([session_id, idx])
+  @@map("messages")
+}
+
+model SessionSummary {
+  session_id    String   @id @db.Uuid
+  short_title   String
+  short_summary String?
+  updated_at    DateTime @default(now()) @db.Timestamptz(6)
+  sessions      Session  @relation(fields: [session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([session_id])
+  @@map("session_summaries")
+}
+
+model Session {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id           String
+  title             String
+  created_at        DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at        DateTime        @default(now()) @db.Timestamptz(6)
+  archived_at       DateTime?       @db.Timestamptz(6)
+  meta              Json            @default("{}")
+  messages          Message[]
+  session_summaries SessionSummary?
+
+  @@index([user_id, created_at(sort: Desc)])
+  @@map("sessions")
+}
