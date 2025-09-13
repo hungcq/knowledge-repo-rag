@@ -1,10 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import "./index.css";
+import 'antd/dist/reset.css';
 import ChatApp from "./App";
+import { App as AntApp, ConfigProvider, theme } from 'antd';
+import 'antd/dist/reset.css';
 
-ReactDOM.createRoot(document.getElementById("root")).render(
-    <React.StrictMode>
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+    <AntApp>
       <ChatApp />
-    </React.StrictMode>
+    </AntApp>
+  </ConfigProvider>
 );
