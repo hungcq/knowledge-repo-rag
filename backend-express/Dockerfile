@@ -5,12 +5,14 @@ WORKDIR /app
 # Install deps first (better layer caching)
 COPY package*.json ./
 COPY tsconfig.json ./
-COPY generated ./generated
-
+COPY prisma ./prisma
 RUN npm install
+
+# Generate Prisma client
+RUN npx prisma generate --schema=prisma/schema.prisma
+
 # Copy source code (includes /generated/prisma if you keep it in repo)
 COPY . .
-RUN mkdir -p dist/generated && cp -r generated/prisma dist/generated/
 
 # Build TypeScript
 RUN npm run build

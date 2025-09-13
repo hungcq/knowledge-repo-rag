@@ -4,7 +4,7 @@ import OpenAI from 'openai';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import dotenv from 'dotenv';
 import {Server as HttpServer} from 'http';
-import { PrismaClient } from './generated/prisma/index.js';
+import { PrismaClient } from '@prisma/client';
 import cors from 'cors';
 
 // Load environment variables from .env file
