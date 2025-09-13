@@ -1,0 +1,58 @@
+name: Deploy Backend Express to Kubernetes
+
+on:
+  workflow_run:
+    workflows: ["Build Backend Express Docker Image"]
+    types:
+      - completed
+  push:
+    paths:
+      - '.github/workflows/deploy.yaml'
+      - 'backend-express/k8s/**'
+
+jobs:
+  deploy:
+    if: >
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Set up KUBECONFIG
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+
+      - name: Install SOPS
+        run: |
+          wget -O sops https://github.com/getsops/sops/releases/download/v3.10.2/sops-v3.10.2.linux.amd64
+          chmod +x sops && sudo mv sops /usr/local/bin/
+
+      - name: Decrypt secrets
+        run: |
+          echo "${{ secrets.SOPS_AGE_KEY }}" > age.key
+          echo "${{ secrets.SOPS_AGE_KEY }}"
+          chmod 600 age.key
+          SOPS_AGE_KEY_FILE=age.key sops -d backend-express/k8s/secret.enc.yaml > backend-express/k8s/secret.yaml
+          rm age.key
+
+      - name: Apply manifests
+        run: |
+          kubectl apply -f backend-express/k8s/configmap.yaml
+          kubectl apply -f backend-express/k8s/secret.yaml
+          kubectl apply -f backend-express/k8s/deployment.yaml
+
+      - name: Set deployment image tag
+        if: github.event_name == 'workflow_run'
+        run: |
+          VERSION=$(date +'%Y%m%d')-$(git rev-parse --short HEAD)
+          kubectl set image deployment/backend-express backend-express=${{ secrets.DOCKERHUB_USERNAME }}/knowledge-repo-rag-backend:$VERSION
+
+      - name: Wait for rollout
+        if: github.event_name == 'workflow_run'
+        run: kubectl rollout status deployment/backend-express --timeout=300s

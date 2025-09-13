@@ -1,3 +1,4 @@
 docker buildx create --use
 docker buildx build --platform linux/amd64,linux/arm64 -t hungcq/knowledge-repo-rag:latest --push .
-kubectl create secret generic knowledge-repo-rag-secrets --from-literal=OPENAI_API_KEY='your-api-key-here'
+
+sops --encrypt --age age1alrmt6qp308t0ww7ud0pynxwk636vz7r9u6qr5cehsu7747acdts8aulky k8s/secret.yaml > k8s/secret.enc.yaml

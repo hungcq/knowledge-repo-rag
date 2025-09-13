@@ -1,8 +1,17 @@
-/.env
-/.idea
-/node_modules
-/frontend/node_modules
+*/node_modules
+*/dist
+*/.env
+*/.serverless
+*/.vscode
 *.iml
+/node_modules
+/dist
+/.env
+/.serverless
+/.vscode
+/.venv
+/.idea
+*secret.yaml
 
 # Jupyter Notebook
 .ipynb_checkpoints

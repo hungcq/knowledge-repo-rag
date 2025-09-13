@@ -4,6 +4,7 @@ metadata:
   name: knowledge-repo-rag-config
 data:
   VECTOR_STORE_ID: vs_683f2a04c0748191a65d91c2f414c755
+  QDRANT_URL: "https://71a048d2-1a20-48d3-821e-dc39439940ca.eu-central-1-0.aws.cloud.qdrant.io:6333"
 
 ---
 apiVersion: apps/v1

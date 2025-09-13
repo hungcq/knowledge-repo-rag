@@ -1,0 +1,36 @@
+name: Build Backend Express Docker Image
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build.yaml'
+      - 'backend-express/*'
+      - 'backend-express/*/**'     # include all subdirs *except* scripts
+      - '!backend-express/scripts/**'
+      - '!backend-express/k8s/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u ${{ secrets.DOCKERHUB_USERNAME }} --password-stdin
+
+      - name: Generate version
+        id: version
+        run: echo "VERSION=$(date +'%Y%m%d')-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build and tag image
+        run: |
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/knowledge-repo-rag-backend:${{ steps.version.outputs.VERSION }} ./backend-express
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/knowledge-repo-rag-backend:${{ steps.version.outputs.VERSION }} ${{ secrets.DOCKERHUB_USERNAME }}/knowledge-repo-rag-backend:latest
+
+      - name: Push image
+        run: |
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/knowledge-repo-rag-backend:${{ steps.version.outputs.VERSION }}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/knowledge-repo-rag-backend:latest
