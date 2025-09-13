@@ -6,7 +6,7 @@ on:
     paths:
       - '.github/workflows/build.yaml'
       - 'backend-express/*'
-      - 'backend-express/*/**'     # include all subdirs *except* scripts
+      - 'backend-express/*/**' # include all subdirs *except* scripts
       - '!backend-express/scripts/**'
       - '!backend-express/k8s/**'
 
