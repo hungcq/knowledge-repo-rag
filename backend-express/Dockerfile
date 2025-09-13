@@ -2,14 +2,16 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# Copy package files
+# Install deps first (better layer caching)
 COPY package*.json ./
 COPY tsconfig.json ./
-
-# Install dependencies
+COPY prisma ./prisma
 RUN npm install
 
-# Copy source code
+# Generate Prisma client
+RUN npx prisma generate --schema=prisma/schema.prisma
+
+# Copy source code (includes /generated/prisma if you keep it in repo)
 COPY . .
 
 # Build TypeScript
@@ -18,5 +20,4 @@ RUN npm run build
 # Expose port
 EXPOSE 1918
 
-# Start the application
-CMD ["node", "dist/server.js"] 
+CMD ["node", "dist/server.js"]
