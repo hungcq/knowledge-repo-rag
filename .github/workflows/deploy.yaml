@@ -49,8 +49,8 @@ jobs:
         if: github.event_name == 'workflow_run'
         run: |
           VERSION=$(date +'%Y%m%d')-$(git rev-parse --short HEAD)
-          kubectl set image deployment/backend-express backend-express=${{ secrets.DOCKERHUB_USERNAME }}/knowledge-repo-rag-backend:$VERSION
+          kubectl set image deployment/knowledge-repo-rag backend-express=${{ secrets.DOCKERHUB_USERNAME }}/knowledge-repo-rag-backend:$VERSION
 
       - name: Wait for rollout
         if: github.event_name == 'workflow_run'
-        run: kubectl rollout status deployment/backend-express --timeout=300s
+        run: kubectl rollout status deployment/knowledge-repo-rag --timeout=300s
