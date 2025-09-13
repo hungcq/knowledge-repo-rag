@@ -36,14 +36,12 @@ jobs:
       - name: Decrypt secrets
         run: |
           echo "${{ secrets.SOPS_AGE_KEY }}" > age.key
-          echo "${{ secrets.SOPS_AGE_KEY }}"
           chmod 600 age.key
           SOPS_AGE_KEY_FILE=age.key sops -d backend-express/k8s/secret.enc.yaml > backend-express/k8s/secret.yaml
           rm age.key
 
       - name: Apply manifests
         run: |
-          kubectl apply -f backend-express/k8s/configmap.yaml
           kubectl apply -f backend-express/k8s/secret.yaml
           kubectl apply -f backend-express/k8s/deployment.yaml
 
