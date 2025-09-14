@@ -1,4 +1,5 @@
 # Knowledge Repo RAG
+
 ## Overview
 **Knowledge Repo RAG** is an end-to-end, production-minded demonstration of a Retrieval-Augmented Generation (RAG) application.
 It enables efficient semantic search and augmentation of large knowledge bases using modern LLMs.
@@ -17,32 +18,26 @@ and a script to ingest data into Qdrant vector database.
 ## Architecture
 ``` mermaid
 flowchart TD
-  subgraph Frontend [React App]
-    UI["User Interface"]
-    UI -->|Sends Question| FAPI["/api/search"]
+ subgraph Frontend["Frontend"]
+        UI["React App"]
   end
-
-  subgraph Backend [Express API]
-    FAPI --> SRV["RAG Service"]
-    SRV -->|Semantic Query| Qdrant[(Qdrant Vector DB)]
-    SRV -->|Doc Lookup| PrismaDB[(SQL DB)]
-    SRV -->|LLM Completion| OpenAI[(OpenAI API)]
+ subgraph Backend["Backend"]
+        HistoryAPIs["Chat History APIs"]
+        APIs["Chat APIs"]
+        SRV["RAG Service"]
+        Qdrant[("Qdrant Vector DB")]
+        OpenAI[("OpenAI API")]
+        PrismaDB[("SQL DB")]
   end
-
-  Frontend --> Backend
-  Backend --> Qdrant
-  Backend --> OpenAI
-  Backend --> PrismaDB
-
-  subgraph Lambda [Optional Lambda]
-    LambdaAPI["/search"]
-    LambdaAPI --> Qdrant
-    LambdaAPI --> OpenAI
-  end
-
-  Note1[("Document Uploader<br/>(Node Script)")];
-  Note1 --> Qdrant
+    Frontend --> APIs
+    Frontend --> HistoryAPIs
+    APIs --> SRV
+    SRV -- Semantic Query --> Qdrant
+    SRV -- LLM Completion --> OpenAI
+    HistoryAPIs -- History Lookup --> PrismaDB
+    Note1[("Documents Ingestion<br>(Node Script)")] --> Qdrant
 ```
+
 ## Code Organization
 ``` 
 knowledge-repo-rag/
@@ -62,6 +57,7 @@ knowledge-repo-rag/
 ```
 
 ## Run Locally and Deploy
+
 ### Prerequisites
 - Node.js v18+
 - npm
