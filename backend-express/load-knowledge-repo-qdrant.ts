@@ -185,6 +185,7 @@ class KnowledgeRepoLoader {
     if (sectionHeader) {
       let anchorText = sectionHeader.toLowerCase()
         .replace(/\s+/g, '-')
+        .replace(/&/g, 'and')
         .replace(/:/g, ''); // Remove all colons
       
       // Check if the section header starts with a number
