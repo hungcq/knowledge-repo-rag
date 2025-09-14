@@ -8,12 +8,10 @@ and a script to ingest data into Qdrant vector database.
 
 ## Features
 - **RAG with OpenAI Integration:** Combines vector search with GPT-powered answer completion.
-- **Semantic Search:** Use Qdrant vector database for fast similarity search over knowledge repositories.
+- **Responsive, Real-time Frontend:** Modern React UI for querying and visualizing results; real-time chat with token streaming.
 - **Document Ingestion:** Simple scripts to upload and vectorize knowledge sources.
-- **Responsive, Real-time Frontend:** Modern React UI for querying and visualizing results; chat responses displayed token by token.
-- **API-First Backend:** Express and Socket.IO APIs serving search and chat endpoints.
-- **Docker & K8s Ready:** Out-of-the-box Dockerfile and Kubernetes manifest for smooth deployment.
-- **Prisma ORM:** Type-safe and robust DB layer (for SQL metadata, optional).
+- **Chat memory, history, and automatic title generation:** Combines OpenAI conversation with chat histories stored in PostgreSQL.
+- **Fully automated CI/CD:** With Docker, Kubernetes, and GitHub Actions
 
 ## Architecture
 ``` mermaid
