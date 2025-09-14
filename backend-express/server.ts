@@ -410,10 +410,18 @@ io.on('connection', async (socket: any) => {
           const titleResp = await openai.responses.create({
             model: 'gpt-4o-mini',
             instructions:
-              "Generate a short, descriptive title (max 50 characters) for this chat conversation based on the user's first message. Return only the title, nothing else.",
-            input: msg,
-            conversation: convId,
-            max_output_tokens: 10,
+              "Generate a short, descriptive title (max 50 characters) for this chat conversation. Return only the title, nothing else.",
+            input: [
+              {
+                content: msg,
+                role: 'user',
+              },
+              {
+                content: fullText,
+                role: 'assistant',
+              }
+            ],
+            max_output_tokens: 16,
           });
 
           const generatedTitle = (titleResp.output_text || 'New Chat').trim();
