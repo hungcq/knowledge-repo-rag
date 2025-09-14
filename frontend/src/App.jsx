@@ -458,6 +458,7 @@ const Chat = () => {
 
             <Footer style={{ textAlign: 'center' }}>
               © Hung Chu - Knowledge Repo Chatbot ·{' '}
+              <a href="https://github.com/hungcq/knowledge-repo-rag" target="_blank" rel="noreferrer">GitHub</a> ·{' '}
               <a href="https://knowledge-repo.hungcq.com" target="_blank" rel="noreferrer">knowledge-repo.hungcq.com</a>
             </Footer>
           </Layout>
