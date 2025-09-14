@@ -1,9 +1,9 @@
 import express from 'express';
-import {Server} from 'socket.io';
+import { Server } from 'socket.io';
 import OpenAI from 'openai';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import dotenv from 'dotenv';
-import {Server as HttpServer} from 'http';
+import { Server as HttpServer } from 'http';
 import { PrismaClient } from '@prisma/client';
 import cors from 'cors';
 
@@ -11,7 +11,7 @@ import cors from 'cors';
 dotenv.config();
 
 // Configure JSON serialization to handle BigInt
-(BigInt.prototype as any).toJSON = function() {
+(BigInt.prototype as any).toJSON = function () {
   return this.toString();
 };
 
@@ -28,65 +28,56 @@ const io = new Server(server, {
   cors: {
     origin: '*', // Allow frontend to connect
     methods: ['GET', 'POST'],
-    credentials: true
+    credentials: true,
   },
-  transports: ['websocket', 'polling']
+  transports: ['websocket', 'polling'],
 });
 
 // Middleware
-app.use(cors({
-  origin: '*', // Allow all origins for development
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+app.use(
+  cors({
+    origin: '*', // Allow all origins for development
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  }),
+);
 app.use(express.json());
 
-// Create a simple assistant for general conversation
-let assistant = await openai.beta.assistants.create({
-  name: 'hungcq knowledge repo assistant',
-  instructions: `You are a helpful assistant that can answer questions based on the provided knowledge base context. When you have access to relevant information from the knowledge base, use it to provide accurate and helpful answers. 
+/**
+ * Instructions sent with each Responses API call.
+ */
+const INSTRUCTIONS = `You are a helpful assistant that can answer questions based on the content of the current chat session
+and the provided knowledge base context. Determine by yourself the relevant of the knowledge base context on the user questions,
+and answer accordingly.
 
 IMPORTANT FORMATTING RULES:
 - When referencing information from the knowledge base, cite sources inline using this format: (source: [Source Title](source_url))
 - Make the source title clickable by wrapping it in square brackets followed by the URL in parentheses
 - Do NOT include file names in the citations, only the source title and URL
 - Example: "According to [Microservices Patterns](https://example.com/microservices-patterns), the best approach is..."
-- Use the provided source URLs exactly as given in the context`,
-  model: 'gpt-4o-mini',
-});
+- Use the provided source URLs exactly as given in the context`;
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// Test socket connection endpoint
-app.get('/test-socket', (req, res) => {
-  res.status(200).json({ 
-    message: 'Socket server is running',
-    connectedClients: io.engine.clientsCount,
-    timestamp: new Date().toISOString() 
-  });
-});
-
 // Function to search Qdrant for relevant knowledge
 async function searchKnowledge(query: string, limit: number): Promise<any[]> {
   try {
-    // Generate embedding for the query
     const response = await openai.embeddings.create({
       model: 'text-embedding-3-small',
       input: query,
     });
-    
+
     const queryEmbedding = response.data[0].embedding;
-    
-    // Search Qdrant
+
     const results = await qdrant.search('knowledge-repo', {
       vector: queryEmbedding,
       limit: limit,
       with_payload: true,
     });
-    
+
     return results;
   } catch (error) {
     console.error('Error searching knowledge base:', error);
@@ -100,17 +91,17 @@ app.get('/api/users/:userId/sessions', async (req, res) => {
   try {
     const { userId } = req.params;
     const sessions = await prisma.session.findMany({
-      where: { 
+      where: {
         user_id: userId,
-        archived_at: null 
+        archived_at: null,
       },
       orderBy: { updated_at: 'desc' },
       include: {
         session_summaries: true,
         _count: {
-          select: { messages: true }
-        }
-      }
+          select: { messages: true },
+        },
+      },
     });
     res.json(sessions);
   } catch (error) {
@@ -125,7 +116,7 @@ app.get('/api/sessions/:sessionId/messages', async (req, res) => {
     const { sessionId } = req.params;
     const messages = await prisma.message.findMany({
       where: { session_id: sessionId },
-      orderBy: { idx: 'asc' }
+      orderBy: { idx: 'asc' },
     });
     res.json(messages);
   } catch (error) {
@@ -139,14 +130,14 @@ app.post('/api/users/:userId/sessions', async (req, res) => {
   try {
     const { userId } = req.params;
     const { title } = req.body;
-    
+
     const session = await prisma.session.create({
       data: {
         user_id: userId,
-        title: title || 'New Chat'
-      }
+        title: title || 'New Chat',
+      },
     });
-    
+
     res.json(session);
   } catch (error) {
     console.error('Error creating session:', error);
@@ -159,46 +150,19 @@ app.put('/api/sessions/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const { title } = req.body;
-    
+
     const session = await prisma.session.update({
       where: { id: sessionId },
-      data: { 
+      data: {
         title,
-        updated_at: new Date()
-      }
+        updated_at: new Date(),
+      },
     });
-    
+
     res.json(session);
   } catch (error) {
     console.error('Error updating session:', error);
     res.status(500).json({ error: 'Failed to update session' });
-  }
-});
-
-// Update session summary
-app.put('/api/sessions/:sessionId/summary', async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    const { short_title, short_summary } = req.body;
-    
-    const sessionSummary = await prisma.sessionSummary.upsert({
-      where: { session_id: sessionId },
-      update: {
-        short_title,
-        short_summary,
-        updated_at: new Date()
-      },
-      create: {
-        session_id: sessionId,
-        short_title,
-        short_summary
-      }
-    });
-    
-    res.json(sessionSummary);
-  } catch (error) {
-    console.error('Error updating session summary:', error);
-    res.status(500).json({ error: 'Failed to update session summary' });
   }
 });
 
@@ -207,65 +171,61 @@ app.get('/api/users/:userId/sessions/search', async (req, res) => {
   try {
     const { userId } = req.params;
     const { q: query } = req.query;
-    
-    // Ensure query is a string
+
     const searchQuery = Array.isArray(query) ? query[0] : query;
     if (!searchQuery || typeof searchQuery !== 'string' || searchQuery.trim() === '') {
       return res.json([]);
     }
-    
-    // Search in session titles and summaries
+
     const sessions = await prisma.session.findMany({
       where: {
         user_id: userId,
         archived_at: null,
         OR: [
           { title: { contains: searchQuery, mode: 'insensitive' } },
-          { 
+          {
             session_summaries: {
               OR: [
                 { short_title: { contains: searchQuery, mode: 'insensitive' } },
-                { short_summary: { contains: searchQuery, mode: 'insensitive' } }
-              ]
-            }
-          }
-        ]
+                { short_summary: { contains: searchQuery, mode: 'insensitive' } },
+              ],
+            },
+          },
+        ],
       },
       orderBy: { updated_at: 'desc' },
       include: {
         session_summaries: true,
         _count: {
-          select: { messages: true }
-        }
-      }
+          select: { messages: true },
+        },
+      },
     });
-    
-    // Also search in message content
+
     const sessionsWithMatchingMessages = await prisma.session.findMany({
       where: {
         user_id: userId,
         archived_at: null,
         messages: {
           some: {
-            content: { contains: searchQuery, mode: 'insensitive' }
-          }
-        }
+            content: { contains: searchQuery, mode: 'insensitive' },
+          },
+        },
       },
       orderBy: { updated_at: 'desc' },
       include: {
         session_summaries: true,
         _count: {
-          select: { messages: true }
-        }
-      }
+          select: { messages: true },
+        },
+      },
     });
-    
-    // Combine and deduplicate results
+
     const allSessions = [...sessions, ...sessionsWithMatchingMessages];
-    const uniqueSessions = allSessions.filter((session, index, self) => 
-      index === self.findIndex(s => s.id === session.id)
+    const uniqueSessions = allSessions.filter(
+      (session, index, self) => index === self.findIndex((s) => s.id === session.id),
     );
-    
+
     res.json(uniqueSessions);
   } catch (error) {
     console.error('Error searching sessions:', error);
@@ -277,42 +237,68 @@ app.get('/api/users/:userId/sessions/search', async (req, res) => {
 io.on('connection', async (socket: any) => {
   console.log('A user connected, socket ID:', socket.id);
 
-  let thread: any;
   let currentSessionId: string = '';
   let currentUserId: string | null = null;
 
+  // Ensure a Conversation exists for the session; create & persist conv_ id if missing
+  async function ensureConversationForSession(sessionId: string) {
+    const row = await prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { openai_conversation_id: true, user_id: true },
+    });
+
+    if (row?.openai_conversation_id?.startsWith('conv_')) {
+      return row.openai_conversation_id;
+    }
+
+    const conv = await openai.conversations.create({
+      // optional metadata tags are handy for debugging in the dashboard
+      metadata: { session_id: sessionId, user_id: row?.user_id || currentUserId || '' },
+    });
+
+    await prisma.session.update({
+      where: { id: sessionId },
+      data: { openai_conversation_id: conv.id }, // conv_...
+    });
+
+    return conv.id;
+  }
+
   // Listen for session initialization
   socket.on('init_session', async (data: any) => {
-    thread = await openai.beta.threads.create();
     console.log('Received init_session event:', data);
     currentUserId = data.userId;
-    
+
     try {
       if (data.sessionId) {
-        // Load existing session
         console.log('Loading existing session:', data.sessionId);
         currentSessionId = data.sessionId;
       } else {
-        // Create new session
         console.log('Creating new session for user:', data.userId);
         const session = await prisma.session.create({
           data: {
             user_id: data.userId,
-            title: 'New Chat'
-          }
+            title: 'New Chat',
+          },
         });
         currentSessionId = session.id;
         console.log('Created session:', session.id);
       }
-      
+
+      // Ensure we have a conv_ id aligned with this session
+      try {
+        await ensureConversationForSession(currentSessionId);
+      } catch (e) {
+        console.error('Failed to ensure conversation:', e);
+      }
+
       console.log('Emitting session_initialized:', { sessionId: currentSessionId });
       socket.emit('session_initialized', { sessionId: currentSessionId });
-      
-      // Emit session list update to refresh the sidebar
-      socket.emit('sessions_updated', { 
+
+      socket.emit('sessions_updated', {
         userId: currentUserId,
         action: 'session_created',
-        sessionId: currentSessionId
+        sessionId: currentSessionId,
       });
     } catch (error) {
       console.error('Error in init_session:', error);
@@ -323,140 +309,134 @@ io.on('connection', async (socket: any) => {
   // Listen for 'message' events from the frontend
   socket.on('message', async (msg: any) => {
     console.log(msg);
-    
+
     if (!currentSessionId || !currentUserId) {
       socket.emit('error', 'Session not initialized');
       return;
     }
 
     try {
-      // Save user message to database
+      // Save user message
       await prisma.message.create({
         data: {
           session_id: currentSessionId,
           role: 'user',
-          content: msg
-        }
+          content: msg,
+        },
       });
 
-      // Check if this is the first message in the session
+      // Count messages in this session
       const messageCount = await prisma.message.count({
-        where: { session_id: currentSessionId }
+        where: { session_id: currentSessionId },
       });
 
       // Update session timestamp
       await prisma.session.update({
         where: { id: currentSessionId },
-        data: { updated_at: new Date() }
+        data: { updated_at: new Date() },
       });
 
-      // Search knowledge base using Qdrant
+      // Ensure conv_ id
+      const convId = await ensureConversationForSession(currentSessionId);
+
+      // RAG: search knowledge base
       const knowledgeResults = await searchKnowledge(msg, 10);
-      
-      // Build context from knowledge results
+
+      // Build context
       let knowledgeContext = '';
-      let sources: any[] = [];
-      
       if (knowledgeResults.length > 0) {
-        knowledgeContext = 'Based on the knowledge base, here is relevant information:\n\n';
-        
-        knowledgeResults.forEach((result, index) => {
+        knowledgeContext = 'Info from knowledge base (might be relevant or not):\n\n';
+        knowledgeResults.forEach((result: any, index: number) => {
           const payload = result.payload;
           const sourceLink = `[${payload.header}](${payload.reference_url})`;
           knowledgeContext += `${index + 1}. ${sourceLink}\n${payload.content}\n\n`;
-          sources.push({
-            title: payload.header,
-            url: payload.reference_url,
-            file: payload.file_name
-          });
         });
-        
-        knowledgeContext += 'Please use this information to answer the user\'s question. When referencing information, cite the source inline using the format [Source Title](source_url) and make sure to use the exact URLs provided above.';
       }
 
-      // Create a message with context for the assistant
-      const contextualMessage = knowledgeContext 
-        ? `${knowledgeContext}\n\nUser question: ${msg}`
-        : msg;
+      const contextualMessage = knowledgeContext ? `${knowledgeContext}\n\nUser question: ${msg}` : msg;
 
-      // Send contextual message to OpenAI
-      const message = await openai.beta.threads.messages.create(
-          thread.id,
-          {
-            role: 'user',
-            content: contextualMessage,
+      /**
+       * Responses API with a pre-created Conversation
+       * - Always pass conversation: convId
+       * - stream: true for SSE deltas
+       * - No need for store:true when using conversations (conversation keeps state)
+       */
+      const stream = await openai.responses.create({
+        model: 'gpt-4o-mini',
+        instructions: INSTRUCTIONS,
+        input: contextualMessage,
+        conversation: convId,  // <-- the important bit
+        stream: true,
+        // temperature: 0.2, // optional
+      });
+
+      let fullText = '';
+      let sawDelta = false;
+
+      for await (const event of stream as any) {
+        if (event.type === 'response.output_text.delta') {
+          const delta = event.delta ?? '';
+          if (delta) {
+            sawDelta = true;
+            fullText += delta;
+            socket.emit('message_stream', delta);
+          }
+        } else if (event.type === 'response.completed') {
+          socket.emit('message_done');
+        } else if (event.type === 'response.error') {
+          socket.emit('message', 'Model error.');
+        }
+      }
+
+      // Only send fallback 'message' if we never streamed deltas
+      if (!sawDelta && fullText.length) {
+        socket.emit('message', fullText);
+      }
+
+      // Save assistant reply
+      if (fullText.length) {
+        await prisma.message.create({
+          data: {
+            session_id: currentSessionId!,
+            role: 'assistant',
+            content: fullText,
           },
-      );
+        });
+      }
 
-      openai.beta.threads.runs.stream(thread.id, {
-        assistant_id: assistant.id,
-      }).
-          on('textCreated', () => {}).
-          on('toolCallCreated',
-              (event: any) => console.log('assistant ' + event.type)).
-          on('messageDone', async (event: any) => {
-            if (event.content[0].type !== 'text') {
-              return;
-            }
-            const {text} = event.content[0];
-            let output = text.value;
-            
-            socket.emit('message', output);
-            
-            // Save assistant message to database
-            await prisma.message.create({
-              data: {
-                session_id: currentSessionId!,
-                role: 'assistant',
-                content: output
-              }
-            });
-
-            // Generate title for the session if this is the first message
-            if (messageCount === 1) {
-              try {
-                const titleResponse = await openai.chat.completions.create({
-                  model: 'gpt-4o-mini',
-                  messages: [
-                    {
-                      role: 'system',
-                      content: 'Generate a short, descriptive title (max 50 characters) for this chat conversation based on the user\'s first message. Return only the title, nothing else.'
-                    },
-                    {
-                      role: 'user',
-                      content: msg
-                    }
-                  ],
-                  max_tokens: 50,
-                  temperature: 0.7
-                });
-
-                const generatedTitle = titleResponse.choices[0].message.content?.trim() || 'New Chat';
-                
-                // Update session title
-                await prisma.session.update({
-                  where: { id: currentSessionId },
-                  data: { title: generatedTitle }
-                });
-
-                // Emit title update to frontend
-                socket.emit('session_title_updated', { 
-                  sessionId: currentSessionId, 
-                  title: generatedTitle 
-                });
-
-                // Emit session list update to refresh the sidebar
-                socket.emit('sessions_updated', { 
-                  userId: currentUserId,
-                  action: 'title_updated',
-                  sessionId: currentSessionId,
-                  title: generatedTitle
-                });
-              } catch (error) {
-                console.error('Error generating title:', error);
-              }
-            }
+      // Generate title only for first user turn (one message stored so far)
+      if (messageCount === 1) {
+        try {
+          const titleResp = await openai.responses.create({
+            model: 'gpt-4o-mini',
+            instructions:
+              "Generate a short, descriptive title (max 50 characters) for this chat conversation based on the user's first message. Return only the title, nothing else.",
+            input: msg,
+            conversation: convId,
           });
+
+          const generatedTitle = (titleResp.output_text || 'New Chat').trim();
+
+          await prisma.session.update({
+            where: { id: currentSessionId },
+            data: { title: generatedTitle },
+          });
+
+          socket.emit('session_title_updated', {
+            sessionId: currentSessionId,
+            title: generatedTitle,
+          });
+
+          socket.emit('sessions_updated', {
+            userId: currentUserId,
+            action: 'title_updated',
+            sessionId: currentSessionId,
+            title: generatedTitle,
+          });
+        } catch (error) {
+          console.error('Error generating title:', error);
+        }
+      }
     } catch (error) {
       console.error('Error:', error);
       socket.emit('message', 'Error occurred');

@@ -7,15 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Book {
-  id         Int      @id(map: "book_pkey") @default(autoincrement())
-  title      String   @db.VarChar(255)
-  author     String   @db.VarChar(255)
-  created_at DateTime @default(now()) @db.Timestamptz(6)
-
-  @@map("books")
-}
-
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model Message {
   id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -44,15 +35,16 @@ model SessionSummary {
 }
 
 model Session {
-  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  user_id           String
-  title             String
-  created_at        DateTime        @default(now()) @db.Timestamptz(6)
-  updated_at        DateTime        @default(now()) @db.Timestamptz(6)
-  archived_at       DateTime?       @db.Timestamptz(6)
-  meta              Json            @default("{}")
-  messages          Message[]
-  session_summaries SessionSummary?
+  id                     String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                String
+  title                  String
+  created_at             DateTime        @default(now()) @db.Timestamptz(6)
+  updated_at             DateTime        @default(now()) @db.Timestamptz(6)
+  archived_at            DateTime?       @db.Timestamptz(6)
+  meta                   Json            @default("{}")
+  openai_conversation_id String?
+  messages               Message[]
+  session_summaries      SessionSummary?
 
   @@index([user_id, created_at(sort: Desc)])
   @@map("sessions")

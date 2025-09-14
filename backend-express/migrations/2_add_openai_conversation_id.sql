@@ -1,0 +1,1 @@
+ALTER TABLE sessions ADD COLUMN openai_conversation_id TEXT NULL;

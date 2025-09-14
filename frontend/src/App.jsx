@@ -22,7 +22,8 @@ const { Header, Sider, Content, Footer } = Layout
 const { Text, Title, Paragraph } = Typography
 const { useBreakpoint } = Grid
 
-const host = 'api.knowledge-repo-rag.hungcq.com'
+const host = 's://api.knowledge-repo-rag.hungcq.com'
+// const host = '://localhost:1918'
 
 // Generate a short random ID (6-8 chars alphanumeric)
 const genShortId = () => Math.random().toString(36).slice(2, 8)
@@ -139,6 +140,8 @@ const Chat = () => {
   const [currentSessionId, setCurrentSessionId] = useState(null)
   const [userId, setUserId] = useState(null)
   const [isSessionInitializing, setIsSessionInitializing] = useState(false)
+  const [isGenerating, setIsGenerating] = useState(false) // <-- streaming spinner
+  const hasStreamedRef = useRef(false) // <-- guard against duplicate final "message"
   const socket = useRef(null)
   const messagesEndRef = useRef(null)
   const screens = useBreakpoint()
@@ -157,21 +160,51 @@ const Chat = () => {
   useEffect(() => {
     if (!userId) return
 
-    socket.current = io(`wss://${host}`)
+    socket.current = io(`ws${host}`)
 
     socket.current.on('connect', () => {})
     socket.current.on('connect_error', () => setIsSessionInitializing(false))
-    socket.current.on('disconnect', () => setIsSessionInitializing(false))
+    socket.current.on('disconnect', () => {
+      setIsSessionInitializing(false)
+      setIsGenerating(false)
+      hasStreamedRef.current = false
+    })
 
+    // Final full message (used as fallback if no streaming happened)
     socket.current.on('message', (content) => {
+      if (hasStreamedRef.current) {
+        // We already built content from deltas; ignore to prevent duplication
+        return
+      }
       setMessages((prev) => {
         const lastMessage = prev[prev.length - 1]
         if (lastMessage?.role === 'assistant') {
-          return [...prev.slice(0, prev.length - 1), { ...lastMessage, content: lastMessage.content + content }]
+          return [...prev.slice(0, prev.length - 1), { ...lastMessage, content: (lastMessage.content || '') + content }]
         }
         return [...prev, { role: 'assistant', content }]
       })
+      setIsGenerating(false)
     })
+
+    // --- STREAMING HANDLERS ---
+    socket.current.on('message_stream', (delta) => {
+      hasStreamedRef.current = true
+      setMessages((prev) => {
+        if (prev.length === 0 || prev[prev.length - 1].role !== 'assistant') {
+          // ensure a placeholder exists
+          return [...prev, { role: 'assistant', content: delta || '' }]
+        }
+        const last = prev[prev.length - 1]
+        return [...prev.slice(0, -1), { ...last, content: (last.content || '') + (delta || '') }]
+      })
+    })
+
+    socket.current.on('message_done', () => {
+      setIsGenerating(false)
+      // reset for next turn
+      setTimeout(() => { hasStreamedRef.current = false }, 0)
+    })
+    // --------------------------
 
     socket.current.on('session_initialized', (data) => {
       if (!currentSessionId) setCurrentSessionId(data.sessionId)
@@ -180,7 +213,9 @@ const Chat = () => {
 
     socket.current.on('error', (error) => {
       setIsSessionInitializing(false)
+      setIsGenerating(false)
       setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${error}` }])
+      hasStreamedRef.current = false
     })
 
     socket.current.on('session_title_updated', (data) => {
@@ -224,7 +259,7 @@ const Chat = () => {
 
   const loadSessions = async () => {
     try {
-      const response = await fetch(`https://${host}/api/users/${userId}/sessions`)
+      const response = await fetch(`http${host}/api/users/${userId}/sessions`)
       const data = await response.json()
       setSessions(data)
       setFilteredSessions(data)
@@ -240,7 +275,7 @@ const Chat = () => {
       return
     }
     try {
-      const response = await fetch(`https://${host}/api/users/${userId}/sessions/search?q=${encodeURIComponent(query)}`)
+      const response = await fetch(`http${host}/api/users/${userId}/sessions/search?q=${encodeURIComponent(query)}`)
       const data = await response.json()
       setFilteredSessions(data)
     } catch (error) {
@@ -250,7 +285,7 @@ const Chat = () => {
 
   const updateSessionTitle = async (sessionId, newTitle) => {
     try {
-      const response = await fetch(`https://${host}/api/sessions/${sessionId}`, {
+      const response = await fetch(`http${host}/api/sessions/${sessionId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: newTitle }),
@@ -265,7 +300,7 @@ const Chat = () => {
 
   const loadMessages = async (sessionId) => {
     try {
-      const response = await fetch(`https://${host}/api/sessions/${sessionId}/messages`)
+      const response = await fetch(`http${host}/api/sessions/${sessionId}/messages`)
       const data = await response.json()
       setMessages(data)
     } catch (error) {}
@@ -274,6 +309,7 @@ const Chat = () => {
   const onSessionSelect = async (sessionId) => {
     setCurrentSessionId(sessionId) // instant update
     setMessages([])
+    hasStreamedRef.current = false
     if (!screens.lg) setSiderCollapsed(true)
     loadMessages(sessionId)
     if (socket.current) socket.current.emit('init_session', { userId, sessionId })
@@ -283,21 +319,25 @@ const Chat = () => {
     setMessages([])
     setCurrentSessionId(null)
     setIsSessionInitializing(true)
+    hasStreamedRef.current = false
     if (socket.current) socket.current.emit('init_session', { userId })
   }
 
   const sendMessage = () => {
     if (input.trim() === '' || !socket.current) return
 
+    const messageToSend = input
+    setInput('')
+
     if (!currentSessionId) {
       setIsSessionInitializing(true)
       socket.current.emit('init_session', { userId })
-      const messageToSend = input
-      setInput('')
       const handleSessionInitialized = (data) => {
         if (!currentSessionId) setCurrentSessionId(data.sessionId)
         setIsSessionInitializing(false)
-        setMessages([{ role: 'user', content: messageToSend }])
+        setIsGenerating(true)
+        hasStreamedRef.current = false
+        setMessages([{ role: 'user', content: messageToSend }, { role: 'assistant', content: '' }]) // placeholder
         socket.current.emit('message', messageToSend)
         socket.current.off('session_initialized', handleSessionInitialized)
       }
@@ -305,9 +345,11 @@ const Chat = () => {
       return
     }
 
-    setMessages([...messages, { role: 'user', content: input }])
-    socket.current.emit('message', input)
-    setInput('')
+    // Normal path
+    setIsGenerating(true)
+    hasStreamedRef.current = false
+    setMessages((prev) => [...prev, { role: 'user', content: messageToSend }, { role: 'assistant', content: '' }]) // placeholder
+    socket.current.emit('message', messageToSend)
   }
 
   const handleKeyDown = (e) => {
@@ -317,7 +359,8 @@ const Chat = () => {
     }
   }
 
-  const showLoading = messages.length > 0 && messages[messages.length - 1].role === 'user'
+  // show spinner while streaming (not just when last is user)
+  const showLoading = isGenerating || (messages.length > 0 && messages[messages.length - 1].role === 'user')
 
   return (
     <ConfigProvider
@@ -365,7 +408,7 @@ const Chat = () => {
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {messages.map((msg, idx) => (
-                    <div key={idx}
+                    msg.content.length > 0 ? <div key={idx}
                          style={{ alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
                       <Space.Compact direction="vertical" style={{ width: '100%' }}>
                         <Text type="secondary"
@@ -384,7 +427,7 @@ const Chat = () => {
                           )}
                         </div>
                       </Space.Compact>
-                    </div>
+                    </div> : null
                   ))}
 
                   {showLoading && (
