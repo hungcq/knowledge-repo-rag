@@ -413,6 +413,7 @@ io.on('connection', async (socket: any) => {
               "Generate a short, descriptive title (max 50 characters) for this chat conversation based on the user's first message. Return only the title, nothing else.",
             input: msg,
             conversation: convId,
+            max_output_tokens: 10,
           });
 
           const generatedTitle = (titleResp.output_text || 'New Chat').trim();
@@ -423,13 +424,6 @@ io.on('connection', async (socket: any) => {
           });
 
           socket.emit('session_title_updated', {
-            sessionId: currentSessionId,
-            title: generatedTitle,
-          });
-
-          socket.emit('sessions_updated', {
-            userId: currentUserId,
-            action: 'title_updated',
             sessionId: currentSessionId,
             title: generatedTitle,
           });
