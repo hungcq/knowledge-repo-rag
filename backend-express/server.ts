@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { Server as HttpServer } from 'http';
 import { PrismaClient } from '@prisma/client';
 import cors from 'cors';
+import {FunctionTool} from "openai/resources/responses/responses";
 
 // Load environment variables from .env file
 dotenv.config();
@@ -42,20 +43,6 @@ app.use(
   }),
 );
 app.use(express.json());
-
-/**
- * Instructions sent with each Responses API call.
- */
-const INSTRUCTIONS = `You are a helpful assistant that can answer questions based on the content of the current chat session
-and the provided knowledge base context. Determine by yourself the relevant of the knowledge base context on the user questions,
-and answer accordingly.
-
-IMPORTANT FORMATTING RULES:
-- When referencing information from the knowledge base, cite sources inline using this format: (source: [Source Title](source_url))
-- Make the source title clickable by wrapping it in square brackets followed by the URL in parentheses
-- Do NOT include file names in the citations, only the source title and URL
-- Example: "According to [Microservices Patterns](https://example.com/microservices-patterns), the best approach is..."
-- Use the provided source URLs exactly as given in the context`;
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -233,6 +220,40 @@ app.get('/api/users/:userId/sessions/search', async (req, res) => {
   }
 });
 
+const tools: FunctionTool[] = [
+  {
+    type: "function",
+    name: "kb_search",
+    description:
+      "Search internal knowledge base for passages relevant to a query. Returns items with title, url, snippet.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        k: { type: "integer", description: "max results", default: 5 },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+];
+
+async function kb_search_impl({ query, k = 5 }: { query: string; k?: number }) {
+  const { data } = await openai.embeddings.create({ model: "text-embedding-3-small", input: query });
+  const results = await qdrant.search("knowledge-repo", {
+    vector: data[0].embedding, limit: Math.min(k, 8), with_payload: true, score_threshold: 0.25 // tune me
+  });
+
+  // Rerank or MMR here if you have it; then compress
+  return results.slice(0,5).map((r:any) => ({
+    id: r.payload?.id,
+    title: r.payload?.header,
+    url: r.payload?.reference_url,
+    snippet: String(r.payload?.content || "").slice(0, 1200)
+  }));
+}
+
 // Handle WebSocket connections
 io.on('connection', async (socket: any) => {
   console.log('A user connected, socket ID:', socket.id);
@@ -339,33 +360,58 @@ io.on('connection', async (socket: any) => {
       // Ensure conv_ id
       const convId = await ensureConversationForSession(currentSessionId);
 
-      // RAG: search knowledge base
-      const knowledgeResults = await searchKnowledge(msg, 10);
-
-      // Build context
-      let knowledgeContext = '';
-      if (knowledgeResults.length > 0) {
-        knowledgeContext = 'Info from knowledge base (might be relevant or not):\n\n';
-        knowledgeResults.forEach((result: any, index: number) => {
-          const payload = result.payload;
-          const sourceLink = `[${payload.header}](${payload.reference_url})`;
-          knowledgeContext += `${index + 1}. ${sourceLink}\n${payload.content}\n\n`;
-        });
-      }
-
-      const contextualMessage = knowledgeContext ? `${knowledgeContext}\n\nUser question: ${msg}` : msg;
-
       /**
        * Responses API with a pre-created Conversation
        * - Always pass conversation: convId
        * - stream: true for SSE deltas
        * - No need for store:true when using conversations (conversation keeps state)
        */
-      const stream = await openai.responses.create({
-        model: 'gpt-4o-mini',
+
+
+      const INSTRUCTIONS = `You are a grounded assistant with two sources:
+1) Your own parametric knowledge.
+2) The \`kb_search\` tool (returns passages with {title,url,snippet}).
+
+Rules:
+- Decide whether to call \`kb_search\`. If you don't need it, answer from your knowledge.
+- If you use any KB content, cite it inline like: (source: [Title](URL)). Do NOT invent URLs or titles.
+- If you didn't use the KB, do not add citations.
+- Be concise and correct. If neither your knowledge nor KB is sufficient, say what’s missing briefly.`;
+
+      let input: Array<any> = [{ role: "user", content: msg }];
+
+      // --- First call: let the model decide to call the tool ---
+      let response = await openai.responses.create({
+        model: "gpt-4o-mini",
         instructions: INSTRUCTIONS,
-        input: contextualMessage,
-        conversation: convId,  // <-- the important bit
+        tools,
+        input,
+        ...(convId ? { conversation: convId } : {}),
+        tool_choice: "auto",
+      });
+
+      // --- Handle any tool calls per the docs example ---
+      for (const item of response.output ?? []) {
+        if (item.type === "function_call" && item.name === "kb_search") {
+          const args = JSON.parse(item.arguments || "{}");
+          const out = await kb_search_impl(args);
+
+          // Feed tool result back as a new input item
+          input.push({
+            type: "function_call_output",
+            call_id: item.call_id,           // must match the call we’re answering
+            output: JSON.stringify(out),     // stringified JSON payload
+          });
+        }
+      }
+
+      const stream = await openai.responses.create({
+        model: "gpt-4o-mini",
+        instructions: INSTRUCTIONS,
+        tools,
+        input,
+        ...(convId ? { conversation: convId } : {}),
+        tool_choice: "auto",
         stream: true,
         // temperature: 0.2, // optional
       });
