@@ -1,12 +1,15 @@
 import express from 'express';
 import { Server } from 'socket.io';
-import OpenAI from 'openai';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import dotenv from 'dotenv';
 import { Server as HttpServer } from 'http';
 import { PrismaClient } from '@prisma/client';
 import cors from 'cors';
-import {FunctionTool} from "openai/resources/responses/responses";
+import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
+import { AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
+import { DynamicStructuredTool } from '@langchain/core/tools';
+import { concat } from '@langchain/core/utils/stream';
+import { z } from 'zod';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -16,12 +19,81 @@ dotenv.config();
   return this.toString();
 };
 
-const openai = new OpenAI();
+const chatModel = new ChatOpenAI({
+  model: process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini',
+  temperature: 0.2,
+});
+const embeddingsModel = new OpenAIEmbeddings({
+  model: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
+});
 const prisma = new PrismaClient();
 const qdrant = new QdrantClient({
   url: process.env.QDRANT_URL || 'http://localhost:6333',
   apiKey: process.env.QDRANT_API_KEY,
 });
+
+function toPositiveInt(raw: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(raw ?? '', 10);
+  return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
+}
+
+const RECENT_MESSAGE_LIMIT = toPositiveInt(process.env.CHAT_RECENT_MESSAGE_LIMIT, 10);
+const SUMMARY_THRESHOLD_MESSAGES = toPositiveInt(process.env.CHAT_SUMMARY_THRESHOLD, 18);
+const SUMMARY_REFRESH_INTERVAL = toPositiveInt(process.env.CHAT_SUMMARY_REFRESH_INTERVAL, 4);
+const SUMMARY_CONTEXT_MESSAGE_LIMIT = toPositiveInt(process.env.CHAT_SUMMARY_CONTEXT_LIMIT, 40);
+
+function messageContentToString(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+      .join('');
+  }
+
+  if (typeof content === 'object' && content !== null) {
+    if ('text' in (content as any) && typeof (content as any).text === 'string') {
+      return (content as any).text;
+    }
+
+    if ('toString' in content) {
+      return String(content);
+    }
+  }
+
+  return '';
+}
+
+function extractChunkText(chunk: unknown): string {
+  if (!chunk) {
+    return '';
+  }
+
+  if (typeof chunk === 'string') {
+    return chunk;
+  }
+
+  if (chunk instanceof AIMessage || chunk instanceof AIMessageChunk) {
+    return messageContentToString(chunk.content);
+  }
+
+  if (Array.isArray(chunk)) {
+    return chunk.map((part) => extractChunkText(part)).join('');
+  }
+
+  if (typeof chunk === 'object') {
+    if ('content' in (chunk as any)) {
+      return messageContentToString((chunk as any).content);
+    }
+    if ('text' in (chunk as any)) {
+      return String((chunk as any).text ?? '');
+    }
+  }
+
+  return '';
+}
 
 const app = express();
 const server = new HttpServer(app);
@@ -48,29 +120,6 @@ app.use(express.json());
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
-
-// Function to search Qdrant for relevant knowledge
-async function searchKnowledge(query: string, limit: number): Promise<any[]> {
-  try {
-    const response = await openai.embeddings.create({
-      model: 'text-embedding-3-small',
-      input: query,
-    });
-
-    const queryEmbedding = response.data[0].embedding;
-
-    const results = await qdrant.search('knowledge-repo', {
-      vector: queryEmbedding,
-      limit: limit,
-      with_payload: true,
-    });
-
-    return results;
-  } catch (error) {
-    console.error('Error searching knowledge base:', error);
-    return [];
-  }
-}
 
 // API Routes
 // Get all sessions for a user
@@ -220,39 +269,49 @@ app.get('/api/users/:userId/sessions/search', async (req, res) => {
   }
 });
 
-const tools: FunctionTool[] = [
-  {
-    type: "function",
-    name: "kb_search",
-    description:
-      "Search internal knowledge base for passages relevant to a query. Returns items with title, url, snippet.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string" },
-        k: { type: "integer", description: "max results", default: 5 },
-      },
-      required: ["query"],
-      additionalProperties: false,
-    },
-    strict: true,
-  },
-];
+type KbSearchArgs = { query: string; k?: number };
 
-async function kb_search_impl({ query, k = 5 }: { query: string; k?: number }) {
-  const { data } = await openai.embeddings.create({ model: "text-embedding-3-small", input: query });
-  const results = await qdrant.search("knowledge-repo", {
-    vector: data[0].embedding, limit: Math.min(k, 8), with_payload: true, score_threshold: 0.25 // tune me
+async function kb_search_impl({ query, k = 5 }: KbSearchArgs) {
+  const normalizedK = Math.max(1, Math.min(k ?? 5, 8));
+  const vector = await embeddingsModel.embedQuery(query);
+  const results = await qdrant.search('knowledge-repo', {
+    vector,
+    limit: normalizedK,
+    with_payload: true,
+    score_threshold: 0.25, // tune me
   });
 
-  // Rerank or MMR here if you have it; then compress
-  return results.slice(0,5).map((r:any) => ({
+  return results.slice(0, Math.min(normalizedK, 5)).map((r: any) => ({
     id: r.payload?.id,
     title: r.payload?.header,
     url: r.payload?.reference_url,
-    snippet: String(r.payload?.content || "").slice(0, 1200)
+    snippet: String(r.payload?.content || '').slice(0, 1200),
   }));
 }
+
+const kbSearchTool = new DynamicStructuredTool({
+  name: 'kb_search',
+  description:
+    'Search internal knowledge base for passages relevant to a query. Returns items with title, url, snippet.',
+  schema: z.object({
+    query: z.string(),
+    k: z.number().int().positive().max(8).optional(),
+  }),
+  func: async (args: KbSearchArgs) => {
+    const result = await kb_search_impl(args);
+    return JSON.stringify(result);
+  },
+});
+
+const INSTRUCTIONS = `You are a grounded assistant with two sources:
+1) Your own parametric knowledge.
+2) The \`kb_search\` tool (returns passages with {title,url,snippet}).
+
+Rules:
+- Decide whether KB content is relevant to the current query.
+- If you use any KB content, cite it inline like: (source: [Title](URL)). Do NOT invent URLs or titles.
+- If you didn't use the KB, do not add citations.
+- Be concise and correct. If neither your knowledge nor KB is sufficient, say what’s missing briefly.`;
 
 // Handle WebSocket connections
 io.on('connection', async (socket: any) => {
@@ -260,30 +319,6 @@ io.on('connection', async (socket: any) => {
 
   let currentSessionId: string = '';
   let currentUserId: string | null = null;
-
-  // Ensure a Conversation exists for the session; create & persist conv_ id if missing
-  async function ensureConversationForSession(sessionId: string) {
-    const row = await prisma.session.findUnique({
-      where: { id: sessionId },
-      select: { openai_conversation_id: true, user_id: true },
-    });
-
-    if (row?.openai_conversation_id?.startsWith('conv_')) {
-      return row.openai_conversation_id;
-    }
-
-    const conv = await openai.conversations.create({
-      // optional metadata tags are handy for debugging in the dashboard
-      metadata: { session_id: sessionId, user_id: row?.user_id || currentUserId || '' },
-    });
-
-    await prisma.session.update({
-      where: { id: sessionId },
-      data: { openai_conversation_id: conv.id }, // conv_...
-    });
-
-    return conv.id;
-  }
 
   // Listen for session initialization
   socket.on('init_session', async (data: any) => {
@@ -304,13 +339,6 @@ io.on('connection', async (socket: any) => {
         });
         currentSessionId = session.id;
         console.log('Created session:', session.id);
-      }
-
-      // Ensure we have a conv_ id aligned with this session
-      try {
-        await ensureConversationForSession(currentSessionId);
-      } catch (e) {
-        console.error('Failed to ensure conversation:', e);
       }
 
       console.log('Emitting session_initialized:', { sessionId: currentSessionId });
@@ -337,140 +365,170 @@ io.on('connection', async (socket: any) => {
     }
 
     try {
-      // Save user message
-      await prisma.message.create({
-        data: {
-          session_id: currentSessionId,
-          role: 'user',
-          content: msg,
-        },
-      });
+      const [, messageCount] = await prisma.$transaction([
+        prisma.message.create({
+          data: {
+            session_id: currentSessionId,
+            role: 'user',
+            content: msg,
+          },
+        }),
+        prisma.message.count({
+          where: { session_id: currentSessionId },
+        }),
+      ]);
 
-      // Count messages in this session
-      const messageCount = await prisma.message.count({
-        where: { session_id: currentSessionId },
-      });
-
-      // Update session timestamp
       await prisma.session.update({
         where: { id: currentSessionId },
         data: { updated_at: new Date() },
       });
 
-      // Ensure conv_ id
-      const convId = await ensureConversationForSession(currentSessionId);
+      const history: BaseMessage[] = [];
 
-      /**
-       * Responses API with a pre-created Conversation
-       * - Always pass conversation: convId
-       * - stream: true for SSE deltas
-       * - No need for store:true when using conversations (conversation keeps state)
-       */
+      const systemPrompt = new SystemMessage(INSTRUCTIONS);
+      history.push(systemPrompt);
 
-
-      const INSTRUCTIONS = `You are a grounded assistant with two sources:
-1) Your own parametric knowledge.
-2) The \`kb_search\` tool (returns passages with {title,url,snippet}).
-
-Rules:
-- Decide whether to call \`kb_search\`. If you don't need it, answer from your knowledge.
-- If you use any KB content, cite it inline like: (source: [Title](URL)). Do NOT invent URLs or titles.
-- If you didn't use the KB, do not add citations.
-- Be concise and correct. If neither your knowledge nor KB is sufficient, say what’s missing briefly.`;
-
-      let input: Array<any> = [{ role: "user", content: msg }];
-
-      // --- First call: let the model decide to call the tool ---
-      let response = await openai.responses.create({
-        model: "gpt-4o-mini",
-        instructions: INSTRUCTIONS,
-        tools,
-        input,
-        ...(convId ? { conversation: convId } : {}),
-        tool_choice: "auto",
+      const sessionState = await prisma.session.findUnique({
+        where: { id: currentSessionId },
+        select: { summary: true },
       });
 
-      // --- Handle any tool calls per the docs example ---
-      for (const item of response.output ?? []) {
-        if (item.type === "function_call" && item.name === "kb_search") {
-          const args = JSON.parse(item.arguments || "{}");
-          const out = await kb_search_impl(args);
+      if (sessionState?.summary) {
+        history.push(
+          new SystemMessage(
+            `Conversation summary so far (for context only, do not repeat verbatim):\n${sessionState.summary}`,
+          ),
+        );
+      }
 
-          // Feed tool result back as a new input item
-          input.push({
-            type: "function_call_output",
-            call_id: item.call_id,           // must match the call we’re answering
-            output: JSON.stringify(out),     // stringified JSON payload
-          });
+      const previousMessages = await prisma.message.findMany({
+        where: { session_id: currentSessionId },
+        orderBy: { idx: 'desc' },
+        take: RECENT_MESSAGE_LIMIT,
+      });
+
+      previousMessages.reverse();
+
+      for (const message of previousMessages) {
+        if (message.role === 'user') {
+          history.push(new HumanMessage(message.content));
+        } else if (message.role === 'assistant') {
+          history.push(new AIMessage(message.content));
         }
       }
 
-      const stream = await openai.responses.create({
-        model: "gpt-4o-mini",
-        instructions: INSTRUCTIONS,
-        tools,
-        input,
-        ...(convId ? { conversation: convId } : {}),
-        tool_choice: "auto",
-        stream: true,
-        // temperature: 0.2, // optional
-      });
+      history.push(new HumanMessage(msg));
 
+      const modelWithTools = chatModel.bindTools([kbSearchTool]);
       let fullText = '';
-      let sawDelta = false;
+      let assistantMessageId: string | null = null;
 
-      for await (const event of stream as any) {
-        if (event.type === 'response.output_text.delta') {
-          const delta = event.delta ?? '';
+      while (true) {
+        const stream = await modelWithTools.stream(history);
+        let gathered: AIMessageChunk | undefined = undefined;
+        let iterationText = '';
+
+        // Accumulate chunks and stream text content
+        for await (const chunk of stream) {
+          if (!(chunk instanceof AIMessageChunk)) {
+            continue;
+          }
+
+          // Accumulate chunks using concat utility as per LangChain docs
+          gathered = gathered !== undefined ? concat(gathered, chunk) : chunk;
+
+          // Stream text content as it arrives
+          const delta = extractChunkText(chunk.content);
           if (delta) {
-            sawDelta = true;
-            fullText += delta;
+            iterationText += delta;
             socket.emit('message_stream', delta);
           }
-        } else if (event.type === 'response.completed') {
-          socket.emit('message_done');
-        } else if (event.type === 'response.error') {
-          socket.emit('message', 'Model error.');
         }
+
+        if (!gathered) {
+          break;
+        }
+
+        // Check if we have tool calls to execute
+        const toolCalls = gathered.tool_calls ?? [];
+        if (toolCalls.length === 0) {
+          // No tool calls, we're done
+          fullText += iterationText;
+          socket.emit('message_done');
+          break;
+        }
+
+        // First, add the AI message with tool calls to history
+        history.push(new AIMessage({
+          content: gathered.content,
+          tool_calls: toolCalls,
+        }));
+
+        // Execute tool calls and add results to history
+        const toolMessages: ToolMessage[] = [];
+        for (const toolCall of toolCalls) {
+          let parsedArgs: Record<string, unknown> = {};
+          if (toolCall.args) {
+            if (typeof toolCall.args === 'string') {
+              try {
+                parsedArgs = JSON.parse(toolCall.args);
+              } catch (parseError) {
+                console.error('Failed to parse tool arguments:', parseError, toolCall.args);
+              }
+            } else {
+              parsedArgs = toolCall.args as Record<string, unknown>;
+            }
+          }
+
+          let toolResult: unknown;
+          try {
+            toolResult = await kb_search_impl(parsedArgs as KbSearchArgs);
+          } catch (toolError) {
+            console.error('Tool execution error:', toolError);
+            toolResult = [];
+          }
+
+          const toolContent =
+            typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+
+          toolMessages.push(
+            new ToolMessage({
+              tool_call_id: toolCall.id ?? `kb_search_${Date.now()}`,
+              name: toolCall.name ?? 'kb_search',
+              content: toolContent,
+            }),
+          );
+        }
+
+        // Add tool results to history and continue
+        history.push(...toolMessages);
+        fullText += iterationText;
       }
 
-      // Only send fallback 'message' if we never streamed deltas
-      if (!sawDelta && fullText.length) {
-        socket.emit('message', fullText);
-      }
-
-      // Save assistant reply
       if (fullText.length) {
-        await prisma.message.create({
+        const created = await prisma.message.create({
           data: {
             session_id: currentSessionId!,
             role: 'assistant',
             content: fullText,
           },
+          select: { id: true },
         });
+        assistantMessageId = created.id;
       }
 
       // Generate title only for first user turn (one message stored so far)
       if (messageCount === 1) {
         try {
-          const titleResp = await openai.responses.create({
-            model: 'gpt-4o-mini',
-            instructions:
-              "Generate a short, descriptive title (max 50 characters) for this chat conversation. Return only the title, nothing else.",
-            input: [
-              {
-                content: msg,
-                role: 'user',
-              },
-              {
-                content: fullText,
-                role: 'assistant',
-              }
-            ],
-            max_output_tokens: 16,
-          });
+          const titlePrompt = `Generate a short, descriptive title (max 50 characters) for this chat conversation. Return only the title, nothing else.`;
 
-          const generatedTitle = (titleResp.output_text || 'New Chat').trim();
+          const titleResponse = await chatModel.invoke([
+            new SystemMessage(titlePrompt),
+            new HumanMessage(msg),
+            new AIMessage(fullText),
+          ]);
+
+          const generatedTitle = (titleResponse.content as string || 'New Chat').trim();
 
           await prisma.session.update({
             where: { id: currentSessionId },
@@ -483,6 +541,61 @@ Rules:
           });
         } catch (error) {
           console.error('Error generating title:', error);
+        }
+      }
+
+      if (
+        assistantMessageId &&
+        messageCount >= SUMMARY_THRESHOLD_MESSAGES &&
+        (messageCount - 1) % SUMMARY_REFRESH_INTERVAL === 0
+      ) {
+        try {
+          const summaryPrompt = `You are maintaining a running summary of a conversation between a user and an assistant.
+
+Given the new assistant reply and recent messages, produce a concise summary (max 10 sentences) that captures key context, decisions, and follow-ups. This summary will be used to provide context for future turns.
+
+Return plain text only.`;
+
+          const summaryContext: BaseMessage[] = [new SystemMessage(summaryPrompt)];
+
+          if (sessionState?.summary) {
+            summaryContext.push(
+              new SystemMessage(`Existing summary:\n${sessionState.summary}`),
+            );
+          }
+
+          const summaryMessages = await prisma.message.findMany({
+            where: { session_id: currentSessionId },
+            orderBy: { idx: 'desc' },
+            take: SUMMARY_CONTEXT_MESSAGE_LIMIT,
+          });
+
+          summaryMessages.reverse();
+
+          for (const message of summaryMessages) {
+            if (message.role === 'user') {
+              summaryContext.push(new HumanMessage(message.content));
+            } else if (message.role === 'assistant') {
+              summaryContext.push(new AIMessage(message.content));
+            }
+          }
+
+          summaryContext.push(new AIMessage(fullText));
+
+          const summaryResponse = await chatModel.invoke(summaryContext);
+          const updatedSummary = messageContentToString(summaryResponse.content).trim();
+
+          if (updatedSummary.length) {
+            await prisma.session.update({
+              where: { id: currentSessionId },
+              data: {
+                summary: updatedSummary,
+                summary_updated_at: new Date(),
+              },
+            });
+          }
+        } catch (error) {
+          console.error('Error updating summary:', error);
         }
       }
     } catch (error) {

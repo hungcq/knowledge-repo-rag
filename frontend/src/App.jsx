@@ -41,6 +41,24 @@ function getOrCreateUserIdInQuery () {
   return id
 }
 
+// Get sessionId from path or return null
+function getSessionIdFromPath () {
+  const path = window.location.pathname
+  const match = path.match(/^\/chat\/([^\/]+)$/)
+  return match ? match[1] : null
+}
+
+// Update URL path with sessionId
+function updateSessionPath (sessionId) {
+  const url = new URL(window.location.href)
+  if (sessionId) {
+    url.pathname = `/chat/${sessionId}`
+  } else {
+    url.pathname = '/'
+  }
+  window.history.replaceState(null, '', url.toString())
+}
+
 const ChatHistory = ({
   sessions,
   currentSessionId,
@@ -155,6 +173,12 @@ const Chat = () => {
   useEffect(() => {
     const id = getOrCreateUserIdInQuery()
     setUserId(id)
+    
+    // Check if there's a sessionId in the URL path
+    const pathSessionId = getSessionIdFromPath()
+    if (pathSessionId) {
+      setCurrentSessionId(pathSessionId)
+    }
   }, [])
 
   useEffect(() => {
@@ -207,7 +231,10 @@ const Chat = () => {
     // --------------------------
 
     socket.current.on('session_initialized', (data) => {
-      if (!currentSessionId) setCurrentSessionId(data.sessionId)
+      if (!currentSessionId) {
+        setCurrentSessionId(data.sessionId)
+        updateSessionPath(data.sessionId)
+      }
       setIsSessionInitializing(false)
     })
 
@@ -228,7 +255,14 @@ const Chat = () => {
     })
 
     loadSessions().then((s) => {
-      if (s.length === 0) {
+      const pathSessionId = getSessionIdFromPath()
+      
+      if (pathSessionId) {
+        // Load messages for the session from URL path
+        loadMessages(pathSessionId)
+        if (socket.current) socket.current.emit('init_session', { userId, sessionId: pathSessionId })
+        setIsSessionInitializing(false)
+      } else if (s.length === 0) {
         if (socket.current) {
           if (socket.current.connected) {
             setIsSessionInitializing(true)
@@ -311,6 +345,7 @@ const Chat = () => {
     setMessages([])
     hasStreamedRef.current = false
     if (!screens.lg) setSiderCollapsed(true)
+    updateSessionPath(sessionId) // update URL path
     loadMessages(sessionId)
     if (socket.current) socket.current.emit('init_session', { userId, sessionId })
   }
@@ -320,6 +355,7 @@ const Chat = () => {
     setCurrentSessionId(null)
     setIsSessionInitializing(true)
     hasStreamedRef.current = false
+    updateSessionPath(null) // clear URL path
     if (socket.current) socket.current.emit('init_session', { userId })
   }
 
@@ -333,7 +369,10 @@ const Chat = () => {
       setIsSessionInitializing(true)
       socket.current.emit('init_session', { userId })
       const handleSessionInitialized = (data) => {
-        if (!currentSessionId) setCurrentSessionId(data.sessionId)
+        if (!currentSessionId) {
+          setCurrentSessionId(data.sessionId)
+          updateSessionPath(data.sessionId)
+        }
         setIsSessionInitializing(false)
         setIsGenerating(true)
         hasStreamedRef.current = false
