@@ -20,7 +20,7 @@ dotenv.config();
 };
 
 const chatModel = new ChatOpenAI({
-  model: process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini',
+  model: process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-nano',
   temperature: 0.2,
 });
 const embeddingsModel = new OpenAIEmbeddings({
@@ -292,7 +292,7 @@ async function kb_search_impl({ query, k = 5 }: KbSearchArgs) {
 const kbSearchTool = new DynamicStructuredTool({
   name: 'kb_search',
   description:
-    'Search internal knowledge base for passages relevant to a query. Returns items with title, url, snippet.',
+    'MANDATORY: Search internal knowledge base for passages relevant to a query. You MUST use this tool for EVERY user query. Returns items with title, url, snippet.',
   schema: z.object({
     query: z.string(),
     k: z.number().int().positive().max(8).optional(),
@@ -303,15 +303,18 @@ const kbSearchTool = new DynamicStructuredTool({
   },
 });
 
-const INSTRUCTIONS = `You are a grounded assistant with two sources:
+const INSTRUCTIONS = `You are a grounded assistant that MUST ALWAYS use the \`kb_search\` tool to search the knowledge base before responding to any query.
+
+You have access to:
 1) Your own parametric knowledge.
 2) The \`kb_search\` tool (returns passages with {title,url,snippet}).
 
-Rules:
-- Decide whether KB content is relevant to the current query.
+MANDATORY RULES:
+- You MUST ALWAYS call the \`kb_search\` tool for EVERY user query, regardless of how simple or complex it is.
+- Search the knowledge base first, then provide your response based on both the KB results and your knowledge.
 - If you use any KB content, cite it inline like: (source: [Title](URL)). Do NOT invent URLs or titles.
-- If you didn't use the KB, do not add citations.
-- Be concise and correct. If neither your knowledge nor KB is sufficient, say what’s missing briefly.`;
+- If the KB doesn't contain relevant information, provide your best answer from your knowledge.
+- Be concise and correct.`;
 
 // Handle WebSocket connections
 io.on('connection', async (socket: any) => {
@@ -487,6 +490,8 @@ io.on('connection', async (socket: any) => {
             console.error('Tool execution error:', toolError);
             toolResult = [];
           }
+
+          console.log('Tool result:', toolResult);
 
           const toolContent =
             typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
