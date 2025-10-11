@@ -14,10 +14,9 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@langchain/openai": "^0.6.14",
     "@langchain/core": "^0.3.78",
-    "zod": "^3.23.8",
-    "@prisma/client": "^6.15.0",
+    "@langchain/openai": "^0.6.14",
+    "@prisma/client": "6.17.1",
     "@qdrant/js-client-rest": "^1.15.1",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
@@ -25,13 +24,15 @@
     "langchain": "^0.3.35",
     "openai": "5.20.2",
     "socket.io": "^4.8.1",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^20.0.0",
     "@types/uuid": "^10.0.0",
+    "prisma": "6.17.1",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   }

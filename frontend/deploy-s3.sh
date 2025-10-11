@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Configuration
+AWS_PROFILE="default"
 BUCKET_NAME="knowledge-repo-rag"
 DIST_DIR="dist"
 REGION="ap-southeast-1"
@@ -38,6 +39,7 @@ echo "📤 Uploading files to S3..."
 aws s3 sync $DIST_DIR s3://$BUCKET_NAME \
     --region $REGION \
     --delete
+    --profile $AWS_PROFILE
 
 aws cloudfront create-invalidation \
   --distribution-id $CLOUDFRONT_DISTRIBUTION_ID \

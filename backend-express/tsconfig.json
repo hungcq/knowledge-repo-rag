@@ -13,7 +13,11 @@
     "resolveJsonModule": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "allowSyntheticDefaultImports": true,
+    "paths": {
+      "@prisma/client": ["./node_modules/.prisma/client"]
+    }
   },
   "include": [
     "*.ts",
@@ -21,6 +25,6 @@
   ],
   "exclude": [
     "node_modules",
-    "dist",
+    "dist"
   ]
 }
