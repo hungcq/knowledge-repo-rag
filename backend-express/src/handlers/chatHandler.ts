@@ -1,38 +1,315 @@
 import { Socket } from 'socket.io';
-import { AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
-import { concat } from '@langchain/core/utils/stream';
-import { chatModel, prisma, INSTRUCTIONS, RECENT_MESSAGE_LIMIT, SUMMARY_THRESHOLD_MESSAGES, SUMMARY_REFRESH_INTERVAL, SUMMARY_CONTEXT_MESSAGE_LIMIT } from '../config/index.js';
-import { kbSearchTool, kb_search_impl, KbSearchArgs } from '../tools/kbSearch.js';
-import { extractChunkText, messageContentToString } from '../utils/messageUtils.js';
+import { Agent, run, tool, RunContext } from '@openai/agents';
+import {
+  openai,
+  prisma,
+  INSTRUCTIONS,
+  RECENT_MESSAGE_LIMIT,
+  SUMMARY_THRESHOLD_MESSAGES,
+  SUMMARY_REFRESH_INTERVAL,
+  SUMMARY_CONTEXT_MESSAGE_LIMIT,
+  CHAT_MODEL,
+} from '../config/index.js';
+import { kb_search, kbSearchSchema } from '../tools/kbSearch.js';
 
-export function setupChatHandler(socket: Socket) {
-  let currentSessionId: string = '';
+// ============================================================================
+// Types
+// ============================================================================
+
+interface SessionContext {
+  summary: string | null;
+}
+
+interface Message {
+  role: string;
+  content: string;
+}
+
+// ============================================================================
+// Agent Creation (Singleton - Reusable across all sessions)
+// ============================================================================
+//
+// IMPORTANT: Agents are stateless and should be reused!
+// - The agent configuration (tools, model, name) is defined once
+// - Session-specific state (like conversation summary) is passed via context
+// - This improves performance by avoiding repeated agent creation
+// - Dynamic instructions allow personalization per session without new instances
+//
+// Benefits:
+// ✓ Better performance (no repeated initialization)
+// ✓ Lower memory usage (single agent instance)
+// ✓ Cleaner code (no agent factory functions)
+// ============================================================================
+
+// Create the kb_search tool once
+const kbSearchTool = tool({
+  name: 'kb_search',
+  description:
+    'MANDATORY: Search internal knowledge base for passages relevant to a query. You MUST use this tool for EVERY user query. Returns items with title, url, snippet.',
+  parameters: kbSearchSchema,
+  execute: kb_search,
+});
+
+// Create a single agent instance that can be reused across all sessions
+// The agent uses dynamic instructions based on the context passed to run()
+const knowledgeAgent = new Agent<SessionContext>({
+  name: 'Knowledge Assistant',
+  instructions: (ctx: RunContext<SessionContext>) => {
+    const summary = ctx.context?.summary;
+    return summary
+      ? `${INSTRUCTIONS}\n\nConversation summary so far (for context only, do not repeat verbatim):\n${summary}`
+      : INSTRUCTIONS;
+  },
+  model: CHAT_MODEL,
+  tools: [kbSearchTool],
+})
+
+function buildMessageHistory(messages: Message[]): string {
+  return messages
+    .map((message) => {
+      if (message.role === 'user') return `User: ${message.content}`;
+      if (message.role === 'assistant') return `Assistant: ${message.content}`;
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function formatInputWithHistory(history: string, currentMessage: string): string {
+  return history ? `${history}\n\nUser: ${currentMessage}` : currentMessage;
+}
+
+async function streamAgentResponse(stream: any, socket: Socket): Promise<string> {
+  let fullText = '';
+
+  for await (const event of stream) {
+    if (event.type === 'raw_model_stream_event') {
+      const data = event.data;
+      if (data.type === 'output_text_delta' && data.delta) {
+        fullText += data.delta;
+        socket.emit('message_stream', data.delta);
+      }
+    }
+  }
+
+  await stream.completed;
+  socket.emit('message_done');
+
+  return fullText;
+}
+
+async function generateSessionTitle(
+  userMessage: string,
+  assistantResponse: string,
+): Promise<string> {
+  try {
+    const response = await openai.chat.completions.create({
+      model: CHAT_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Generate a short, descriptive title (max 8 words) for this chat conversation. Return only the title, nothing else.',
+        },
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content: assistantResponse },
+      ],
+    });
+
+    return response.choices[0]?.message?.content?.trim() || 'New Chat';
+  } catch (error) {
+    console.error('Error generating title:', error);
+    return 'New Chat';
+  }
+}
+
+async function updateSessionSummary(
+  sessionId: string,
+  existingSummary: string | null,
+  latestResponse: string,
+): Promise<void> {
+  try {
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      {
+        role: 'system',
+        content: `You are maintaining a running summary of a conversation between a user and an assistant.
+
+        Given the new assistant reply and recent messages, produce a concise summary (max 10 sentences) that captures key context, decisions, and follow-ups. This summary will be used to provide context for future turns.
+
+        Return plain text only.`,
+      },
+    ];
+
+    if (existingSummary) {
+      messages.push({
+        role: 'system',
+        content: `Existing summary:\n${existingSummary}`,
+      });
+    }
+
+    const contextMessages = await prisma.message.findMany({
+      where: { session_id: sessionId },
+      orderBy: { idx: 'desc' },
+      take: SUMMARY_CONTEXT_MESSAGE_LIMIT,
+    });
+
+    contextMessages.reverse();
+
+    for (const msg of contextMessages) {
+      if (msg.role === 'user' || msg.role === 'assistant') {
+        messages.push({
+          role: msg.role,
+          content: msg.content,
+        });
+      }
+    }
+
+    messages.push({
+      role: 'assistant',
+      content: latestResponse,
+    });
+
+    const response = await openai.chat.completions.create({
+      model: CHAT_MODEL,
+      messages,
+    });
+
+    const summary = response.choices[0]?.message?.content?.trim();
+
+    if (summary) {
+      await prisma.session.update({
+        where: { id: sessionId },
+        data: {
+          summary,
+          summary_updated_at: new Date(),
+        },
+      });
+    }
+  } catch (error) {
+    console.error('Error updating summary:', error);
+  }
+}
+
+async function initializeSession(userId: string, sessionId?: string): Promise<string> {
+  if (sessionId) {
+    console.log('Loading existing session:', sessionId);
+    return sessionId;
+  }
+
+  console.log('Creating new session for user:', userId);
+  const session = await prisma.session.create({
+    data: {
+      user_id: userId,
+      title: 'New Chat',
+    },
+  });
+
+  console.log('Created session:', session.id);
+  return session.id;
+}
+
+async function handleUserMessage(
+  socket: Socket,
+  sessionId: string,
+  message: string,
+): Promise<void> {
+  // Save user message and get message count
+  const [, messageCount] = await prisma.$transaction([
+    prisma.message.create({
+      data: {
+        session_id: sessionId,
+        role: 'user',
+        content: message,
+      },
+    }),
+    prisma.message.count({
+      where: { session_id: sessionId },
+    }),
+  ]);
+
+  // Update session timestamp
+  await prisma.session.update({
+    where: { id: sessionId },
+    data: { updated_at: new Date() },
+  });
+
+  // Load session state and history
+  const [sessionState, previousMessages] = await Promise.all([
+    prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { summary: true },
+    }),
+    prisma.message.findMany({
+      where: { session_id: sessionId },
+      orderBy: { idx: 'desc' },
+      take: RECENT_MESSAGE_LIMIT,
+    }),
+  ]);
+
+  previousMessages.reverse();
+
+  // Build input with history
+  const history = buildMessageHistory(previousMessages);
+  const input = formatInputWithHistory(history, message);
+
+  // Run agent with session context (agent is reused, context provides session-specific data)
+  const stream = await run(knowledgeAgent, input, {
+    stream: true,
+    context: {
+      summary: sessionState?.summary || null,
+    },
+  });
+  const assistantResponse = await streamAgentResponse(stream, socket);
+
+  // Save assistant response
+  if (assistantResponse.length > 0) {
+    await prisma.message.create({
+      data: {
+        session_id: sessionId,
+        role: 'assistant',
+        content: assistantResponse,
+      },
+    });
+  }
+
+  // Generate title for first message
+  if (messageCount === 1) {
+    const title = await generateSessionTitle(message, assistantResponse);
+    await prisma.session.update({
+      where: { id: sessionId },
+      data: { title },
+    });
+
+    socket.emit('session_title_updated', {
+      sessionId,
+      title,
+    });
+  }
+
+  // Update summary periodically
+  const shouldUpdateSummary =
+    assistantResponse.length > 0 &&
+    messageCount >= SUMMARY_THRESHOLD_MESSAGES &&
+    (messageCount - 1) % SUMMARY_REFRESH_INTERVAL === 0;
+
+  if (shouldUpdateSummary) {
+    await updateSessionSummary(sessionId, sessionState?.summary || null, assistantResponse);
+  }
+}
+
+export function setupChatHandler(socket: Socket): void {
+  let currentSessionId = '';
   let currentUserId: string | null = null;
 
-  // Listen for session initialization
-  socket.on('init_session', async (data: any) => {
+  // Initialize session
+  socket.on('init_session', async (data: { userId: string; sessionId?: string }) => {
     console.log('Received init_session event:', data);
     currentUserId = data.userId;
 
     try {
-      if (data.sessionId) {
-        console.log('Loading existing session:', data.sessionId);
-        currentSessionId = data.sessionId;
-      } else {
-        console.log('Creating new session for user:', data.userId);
-        const session = await prisma.session.create({
-          data: {
-            user_id: data.userId,
-            title: 'New Chat',
-          },
-        });
-        currentSessionId = session.id;
-        console.log('Created session:', session.id);
-      }
+      currentSessionId = await initializeSession(data.userId, data.sessionId);
 
-      console.log('Emitting session_initialized:', { sessionId: currentSessionId });
       socket.emit('session_initialized', { sessionId: currentSessionId });
-
       socket.emit('sessions_updated', {
         userId: currentUserId,
         action: 'session_created',
@@ -44,9 +321,9 @@ export function setupChatHandler(socket: Socket) {
     }
   });
 
-  // Listen for 'message' events from the frontend
-  socket.on('message', async (msg: any) => {
-    console.log(msg);
+  // Handle user messages
+  socket.on('message', async (message: string) => {
+    console.log('Received message:', message);
 
     if (!currentSessionId || !currentUserId) {
       socket.emit('error', 'Session not initialized');
@@ -54,249 +331,15 @@ export function setupChatHandler(socket: Socket) {
     }
 
     try {
-      const [, messageCount] = await prisma.$transaction([
-        prisma.message.create({
-          data: {
-            session_id: currentSessionId,
-            role: 'user',
-            content: msg,
-          },
-        }),
-        prisma.message.count({
-          where: { session_id: currentSessionId },
-        }),
-      ]);
-
-      await prisma.session.update({
-        where: { id: currentSessionId },
-        data: { updated_at: new Date() },
-      });
-
-      const history: BaseMessage[] = [];
-
-      const systemPrompt = new SystemMessage(INSTRUCTIONS);
-      history.push(systemPrompt);
-
-      const sessionState = await prisma.session.findUnique({
-        where: { id: currentSessionId },
-        select: { summary: true },
-      });
-
-      if (sessionState?.summary) {
-        history.push(
-          new SystemMessage(
-            `Conversation summary so far (for context only, do not repeat verbatim):\n${sessionState.summary}`,
-          ),
-        );
-      }
-
-      const previousMessages = await prisma.message.findMany({
-        where: { session_id: currentSessionId },
-        orderBy: { idx: 'desc' },
-        take: RECENT_MESSAGE_LIMIT,
-      });
-
-      previousMessages.reverse();
-
-      for (const message of previousMessages) {
-        if (message.role === 'user') {
-          history.push(new HumanMessage(message.content));
-        } else if (message.role === 'assistant') {
-          history.push(new AIMessage(message.content));
-        }
-      }
-
-      history.push(new HumanMessage(msg));
-
-      const modelWithTools = chatModel.bindTools([kbSearchTool]);
-      let fullText = '';
-      let assistantMessageId: string | null = null;
-
-      while (true) {
-        const stream = await modelWithTools.stream(history);
-        let gathered: AIMessageChunk | undefined = undefined;
-        let iterationText = '';
-
-        // Accumulate chunks and stream text content
-        for await (const chunk of stream) {
-          if (!(chunk instanceof AIMessageChunk)) {
-            continue;
-          }
-
-          // Accumulate chunks using concat utility as per LangChain docs
-          gathered = gathered !== undefined ? concat(gathered, chunk) : chunk;
-
-          // Stream text content as it arrives
-          const delta = extractChunkText(chunk.content);
-          if (delta) {
-            iterationText += delta;
-            socket.emit('message_stream', delta);
-          }
-        }
-
-        if (!gathered) {
-          break;
-        }
-
-        // Check if we have tool calls to execute
-        const toolCalls = gathered.tool_calls ?? [];
-        if (toolCalls.length === 0) {
-          // No tool calls, we're done
-          fullText += iterationText;
-          socket.emit('message_done');
-          break;
-        }
-
-        // First, add the AI message with tool calls to history
-        history.push(new AIMessage({
-          content: gathered.content,
-          tool_calls: toolCalls,
-        }));
-
-        // Execute tool calls and add results to history
-        const toolMessages: ToolMessage[] = [];
-        for (const toolCall of toolCalls) {
-          let parsedArgs: Record<string, unknown> = {};
-          if (toolCall.args) {
-            if (typeof toolCall.args === 'string') {
-              try {
-                parsedArgs = JSON.parse(toolCall.args);
-              } catch (parseError) {
-                console.error('Failed to parse tool arguments:', parseError, toolCall.args);
-              }
-            } else {
-              parsedArgs = toolCall.args as Record<string, unknown>;
-            }
-          }
-
-          let toolResult: unknown;
-          try {
-            toolResult = await kb_search_impl(parsedArgs as KbSearchArgs);
-          } catch (toolError) {
-            console.error('Tool execution error:', toolError);
-            toolResult = [];
-          }
-
-          console.log('Tool result:', toolResult);
-
-          const toolContent =
-            typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-
-          toolMessages.push(
-            new ToolMessage({
-              tool_call_id: toolCall.id ?? `kb_search_${Date.now()}`,
-              name: toolCall.name ?? 'kb_search',
-              content: toolContent,
-            }),
-          );
-        }
-
-        // Add tool results to history and continue
-        history.push(...toolMessages);
-        fullText += iterationText;
-      }
-
-      if (fullText.length) {
-        const created = await prisma.message.create({
-          data: {
-            session_id: currentSessionId!,
-            role: 'assistant',
-            content: fullText,
-          },
-          select: { id: true },
-        });
-        assistantMessageId = created.id;
-      }
-
-      // Generate title only for first user turn (one message stored so far)
-      if (messageCount === 1) {
-        try {
-          const titlePrompt = `Generate a short, descriptive title (max 50 characters) for this chat conversation. Return only the title, nothing else.`;
-
-          const titleResponse = await chatModel.invoke([
-            new SystemMessage(titlePrompt),
-            new HumanMessage(msg),
-            new AIMessage(fullText),
-          ]);
-
-          const generatedTitle = (titleResponse.content as string || 'New Chat').trim();
-
-          await prisma.session.update({
-            where: { id: currentSessionId },
-            data: { title: generatedTitle },
-          });
-
-          socket.emit('session_title_updated', {
-            sessionId: currentSessionId,
-            title: generatedTitle,
-          });
-        } catch (error) {
-          console.error('Error generating title:', error);
-        }
-      }
-
-      if (
-        assistantMessageId &&
-        messageCount >= SUMMARY_THRESHOLD_MESSAGES &&
-        (messageCount - 1) % SUMMARY_REFRESH_INTERVAL === 0
-      ) {
-        try {
-          const summaryPrompt = `You are maintaining a running summary of a conversation between a user and an assistant.
-
-Given the new assistant reply and recent messages, produce a concise summary (max 10 sentences) that captures key context, decisions, and follow-ups. This summary will be used to provide context for future turns.
-
-Return plain text only.`;
-
-          const summaryContext: BaseMessage[] = [new SystemMessage(summaryPrompt)];
-
-          if (sessionState?.summary) {
-            summaryContext.push(
-              new SystemMessage(`Existing summary:\n${sessionState.summary}`),
-            );
-          }
-
-          const summaryMessages = await prisma.message.findMany({
-            where: { session_id: currentSessionId },
-            orderBy: { idx: 'desc' },
-            take: SUMMARY_CONTEXT_MESSAGE_LIMIT,
-          });
-
-          summaryMessages.reverse();
-
-          for (const message of summaryMessages) {
-            if (message.role === 'user') {
-              summaryContext.push(new HumanMessage(message.content));
-            } else if (message.role === 'assistant') {
-              summaryContext.push(new AIMessage(message.content));
-            }
-          }
-
-          summaryContext.push(new AIMessage(fullText));
-
-          const summaryResponse = await chatModel.invoke(summaryContext);
-          const updatedSummary = messageContentToString(summaryResponse.content).trim();
-
-          if (updatedSummary.length) {
-            await prisma.session.update({
-              where: { id: currentSessionId },
-              data: {
-                summary: updatedSummary,
-                summary_updated_at: new Date(),
-              },
-            });
-          }
-        } catch (error) {
-          console.error('Error updating summary:', error);
-        }
-      }
+      await handleUserMessage(socket, currentSessionId, message);
     } catch (error) {
-      console.error('Error:', error);
-      socket.emit('message', 'Error occurred');
+      console.error('Error handling message:', error);
+      socket.emit('error', 'Error occurred while processing message');
     }
   });
 
   // Handle disconnection
   socket.on('disconnect', () => {
-    console.log('A user disconnected');
+    console.log('User disconnected');
   });
 }

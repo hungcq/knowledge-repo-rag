@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { QdrantClient } from '@qdrant/js-client-rest';
-import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
+import OpenAI from 'openai';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -17,15 +17,14 @@ function toPositiveInt(raw: string | undefined, fallback: number): number {
   return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
 }
 
-// AI Models
-export const chatModel = new ChatOpenAI({
-  model: process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini',
-  temperature: 0.2,
+// OpenAI client
+export const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-export const embeddingsModel = new OpenAIEmbeddings({
-  model: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
-});
+// Model configuration
+export const CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini';
+export const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
 
 // Database clients
 export const prisma = new PrismaClient();
