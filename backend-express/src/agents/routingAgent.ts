@@ -70,7 +70,8 @@ GUIDELINES:
 - Use the Photo Album Search tools to find relevant photos based on the user's description.
 - Help users refine their search queries if needed.
 - Be helpful in suggesting alternative search terms if no results are found.
-- Show the photo in the response as HTML tags with a width of 700px (ie <img src=[source url] width="700"/>), never as a image tag (ie ![alt text]]([source url])). - Provide context about the photos found when possible.`;
+- Show the photo in the response as HTML tags (ie <img src=[source url]/>), never as a image tag (ie ![alt text]]([source url])).
+- Provide context about the photos found when possible.`;
 
         return summary
             ? `${baseInstructions}\n\nConversation summary so far (for context only, do not repeat verbatim):\n${summary}`

@@ -31,7 +31,27 @@ export const Message = ({ message }) => {
             <div style={{ whiteSpace: 'pre-wrap' }}>{content}</div>
           ) : (
             <div style={{ fontSize: 16 }}>
-              <Markdown rehypePlugins={[rehypeRaw]}>{content}</Markdown>
+              <Markdown 
+                rehypePlugins={[rehypeRaw]}
+                components={{
+                  img: ({ src, alt, ...props }) => (
+                    <img 
+                      src={src} 
+                      alt={alt} 
+                      style={{ 
+                        width: '100%', 
+                        maxWidth: '450px', 
+                        height: 'auto',
+                        display: 'block',
+                        margin: '10px auto'
+                      }} 
+                      {...props} 
+                    />
+                  )
+                }}
+              >
+                {content}
+              </Markdown>
             </div>
           )}
         </div>
