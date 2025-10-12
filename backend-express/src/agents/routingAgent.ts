@@ -2,20 +2,9 @@ import { Agent, tool, RunContext, MCPServerStdio, handoff, MCPServerSSE } from '
 import { CHAT_MODEL } from '../config/index.js';
 import { kbSearchToolDefinition } from '../tools/kbSearch.js';
 
-// ============================================================================
-// Routing Agent
-// ============================================================================
-// This agent determines which specialized agent should handle the user's query
-// and routes the request accordingly.
-// ============================================================================
-
 interface ChatContext {
     summary: string | null;
 }
-
-// ============================================================================
-// Specialized Agents (defined first for handoff references)
-// ============================================================================
 
 // Create MCP server for photo album search
 const photoAlbumMCPServer = new MCPServerSSE({
@@ -90,10 +79,6 @@ GUIDELINES:
     model: CHAT_MODEL,
     mcpServers: [photoAlbumMCPServer],
 });
-
-// ============================================================================
-// Routing Agent
-// ============================================================================
 
 // Create the routing agent that delegates to specialized agents
 export const routingAgent = new Agent<ChatContext>({
