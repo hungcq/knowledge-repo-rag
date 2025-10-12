@@ -1,9 +1,15 @@
 import { z } from 'zod';
 import { openai, qdrant, EMBEDDING_MODEL } from '../config/index.js';
 
-export type KbSearchArgs = { query: string; k?: number };
+// Define the schema for OpenAI Agents SDK
+const kbSearchSchema = z.object({
+  query: z.string().describe('The search query to find relevant knowledge base passages'),
+  k: z.number().int().positive().max(8).optional().nullable().describe('Number of results to return (1-8)'),
+});
 
-export async function kb_search({ query, k = 5 }: KbSearchArgs) {
+type KbSeachParams = z.infer<typeof kbSearchSchema>;
+
+async function kb_search({ query, k }: KbSeachParams) {
   const normalizedK = Math.max(1, Math.min(k ?? 5, 8));
 
   // Get embedding using OpenAI client
@@ -29,15 +35,10 @@ export async function kb_search({ query, k = 5 }: KbSearchArgs) {
   }));
 }
 
-// Define the schema for OpenAI Agents SDK
-export const kbSearchSchema = z.object({
-  query: z.string().describe('The search query to find relevant knowledge base passages'),
-  k: z.number().int().positive().max(8).optional().describe('Number of results to return (1-8)'),
-});
-
 export const kbSearchToolDefinition = {
   name: 'kb_search',
   description:
     'MANDATORY: Search internal knowledge base for passages relevant to a query. You MUST use this tool for EVERY user query. Returns items with title, url, snippet.',
   parameters: kbSearchSchema,
+  execute: kb_search,
 };

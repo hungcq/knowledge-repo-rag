@@ -1,16 +1,15 @@
 import { Socket } from 'socket.io';
-import { Agent, run, tool, RunContext } from '@openai/agents';
+import { run } from '@openai/agents';
 import {
   openai,
   prisma,
-  INSTRUCTIONS,
   RECENT_MESSAGE_LIMIT,
   SUMMARY_THRESHOLD_MESSAGES,
   SUMMARY_REFRESH_INTERVAL,
   SUMMARY_CONTEXT_MESSAGE_LIMIT,
   CHAT_MODEL,
 } from '../config/index.js';
-import { kb_search, kbSearchSchema } from '../tools/kbSearch.js';
+import { routingAgent, knowledgeAgent } from '../agents/routingAgent.js';
 
 // ============================================================================
 // Types
@@ -26,11 +25,11 @@ interface Message {
 }
 
 // ============================================================================
-// Agent Creation (Singleton - Reusable across all sessions)
+// Agent Usage (Singleton - Reusable across all sessions)
 // ============================================================================
 //
 // IMPORTANT: Agents are stateless and should be reused!
-// - The agent configuration (tools, model, name) is defined once
+// - The routing agent is imported from the agents module
 // - Session-specific state (like conversation summary) is passed via context
 // - This improves performance by avoiding repeated agent creation
 // - Dynamic instructions allow personalization per session without new instances
@@ -39,30 +38,8 @@ interface Message {
 // ✓ Better performance (no repeated initialization)
 // ✓ Lower memory usage (single agent instance)
 // ✓ Cleaner code (no agent factory functions)
+// ✓ Intelligent routing between knowledge and photo search
 // ============================================================================
-
-// Create the kb_search tool once
-const kbSearchTool = tool({
-  name: 'kb_search',
-  description:
-    'MANDATORY: Search internal knowledge base for passages relevant to a query. You MUST use this tool for EVERY user query. Returns items with title, url, snippet.',
-  parameters: kbSearchSchema,
-  execute: kb_search,
-});
-
-// Create a single agent instance that can be reused across all sessions
-// The agent uses dynamic instructions based on the context passed to run()
-const knowledgeAgent = new Agent<SessionContext>({
-  name: 'Knowledge Assistant',
-  instructions: (ctx: RunContext<SessionContext>) => {
-    const summary = ctx.context?.summary;
-    return summary
-      ? `${INSTRUCTIONS}\n\nConversation summary so far (for context only, do not repeat verbatim):\n${summary}`
-      : INSTRUCTIONS;
-  },
-  model: CHAT_MODEL,
-  tools: [kbSearchTool],
-})
 
 function buildMessageHistory(messages: Message[]): string {
   return messages
@@ -212,6 +189,7 @@ async function handleUserMessage(
   socket: Socket,
   sessionId: string,
   message: string,
+  userId: string,
 ): Promise<void> {
   // Save user message and get message count
   const [, messageCount] = await prisma.$transaction([
@@ -252,14 +230,15 @@ async function handleUserMessage(
   const history = buildMessageHistory(previousMessages);
   const input = formatInputWithHistory(history, message);
 
-  // Run agent with session context (agent is reused, context provides session-specific data)
-  const stream = await run(knowledgeAgent, input, {
+  // Run routing agent with session context and handle handoffs
+  let result = await run(userId === process.env.SECRET_USER_ID ? routingAgent : knowledgeAgent, input, {
     stream: true,
     context: {
       summary: sessionState?.summary || null,
     },
   });
-  const assistantResponse = await streamAgentResponse(stream, socket);
+
+  const assistantResponse = await streamAgentResponse(result, socket);
 
   // Save assistant response
   if (assistantResponse.length > 0) {
@@ -331,7 +310,7 @@ export function setupChatHandler(socket: Socket): void {
     }
 
     try {
-      await handleUserMessage(socket, currentSessionId, message);
+      await handleUserMessage(socket, currentSessionId, message, currentUserId);
     } catch (error) {
       console.error('Error handling message:', error);
       socket.emit('error', 'Error occurred while processing message');

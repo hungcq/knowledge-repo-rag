@@ -184,8 +184,8 @@ const Chat = () => {
   }
 
   const loadMessages = async (sessionId) => {
-    const data = await sessionService.loadMessages(sessionId)
-    setMessages(data)
+    const data = await sessionService.loadMessages(sessionId, userId)
+    setMessages(Array.isArray(data) ? data : [])
   }
 
   const onSessionSelect = async (sessionId) => {
@@ -328,7 +328,7 @@ const Chat = () => {
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {messages.map((msg, idx) => (
+                  {Array.isArray(messages) && messages.map((msg, idx) => (
                     <Message key={idx} message={msg} />
                   ))}
 

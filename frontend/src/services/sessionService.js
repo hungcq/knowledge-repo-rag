@@ -45,9 +45,9 @@ export const sessionService = {
     }
   },
 
-  async loadMessages(sessionId) {
+  async loadMessages(sessionId, userId) {
     try {
-      const response = await fetch(`${httpUrl}/api/sessions/${sessionId}/messages`)
+      const response = await fetch(`${httpUrl}/api/sessions/${sessionId}/messages?userId=${encodeURIComponent(userId)}`)
       const data = await response.json()
       return data
     } catch (error) {

@@ -1,6 +1,7 @@
 import React from 'react'
 import { Space, Typography } from 'antd'
 import Markdown from 'react-markdown'
+import rehypeRaw from 'rehype-raw'
 
 const { Text } = Typography
 
@@ -30,7 +31,7 @@ export const Message = ({ message }) => {
             <div style={{ whiteSpace: 'pre-wrap' }}>{content}</div>
           ) : (
             <div style={{ fontSize: 16 }}>
-              <Markdown>{content}</Markdown>
+              <Markdown rehypePlugins={[rehypeRaw]}>{content}</Markdown>
             </div>
           )}
         </div>

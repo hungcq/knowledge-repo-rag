@@ -31,6 +31,24 @@ sessionRouter.get('/users/:userId/sessions', async (req, res) => {
 sessionRouter.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const { sessionId } = req.params;
+    const { userId } = req.query;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+    
+    // First verify the session belongs to the user
+    const session = await prisma.session.findFirst({
+      where: {
+        id: sessionId,
+        user_id: userId as string,
+      },
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found or access denied' });
+    }
+
     const messages = await prisma.message.findMany({
       where: { session_id: sessionId },
       orderBy: { idx: 'asc' },
