@@ -11,35 +11,10 @@ import {
 } from '../config/index.js';
 import { routingAgent, knowledgeAgent } from '../agents/routingAgent.js';
 
-// ============================================================================
-// Types
-// ============================================================================
-
-interface SessionContext {
-  summary: string | null;
-}
-
 interface Message {
   role: string;
   content: string;
 }
-
-// ============================================================================
-// Agent Usage (Singleton - Reusable across all sessions)
-// ============================================================================
-//
-// IMPORTANT: Agents are stateless and should be reused!
-// - The routing agent is imported from the agents module
-// - Session-specific state (like conversation summary) is passed via context
-// - This improves performance by avoiding repeated agent creation
-// - Dynamic instructions allow personalization per session without new instances
-//
-// Benefits:
-// ✓ Better performance (no repeated initialization)
-// ✓ Lower memory usage (single agent instance)
-// ✓ Cleaner code (no agent factory functions)
-// ✓ Intelligent routing between knowledge and photo search
-// ============================================================================
 
 function buildMessageHistory(messages: Message[]): string {
   return messages
@@ -88,8 +63,11 @@ async function generateSessionTitle(
           content:
             'Generate a short, descriptive title (max 8 words) for this chat conversation. Return only the title, nothing else.',
         },
-        { role: 'user', content: userMessage },
-        { role: 'assistant', content: assistantResponse },
+        {
+          role: 'user', content: `Below are the content of the conversation: 
+          User: ${userMessage}\n\n
+          Assistant: ${assistantResponse}`
+        },
       ],
     });
 
