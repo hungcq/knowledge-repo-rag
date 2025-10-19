@@ -9,12 +9,12 @@ const IMAGE_COLLECTION = 'knowledge-repo-diagrams';
 // Define the schema for OpenAI Agents SDK
 const kbSearchSchema = z.object({
   query: z.string().describe('The search query to find relevant knowledge base passages and images'),
-  k: z.number().int().positive().max(20).describe('Number of results to return (1-20, default: 10)'),
+  k: z.number().int().describe('Number of results to return (1-20, default: 10)'),
 });
 
 type KbSeachParams = z.infer<typeof kbSearchSchema>;
 
-async function kb_search({query, k = 10}: KbSeachParams) {
+export async function kb_search({query, k = 10}: KbSeachParams) {
   // Search both collections in parallel
   const [textResults, imageResults] = await Promise.all([
     // Search text collection with Google text embeddings
@@ -44,7 +44,7 @@ async function kb_search({query, k = 10}: KbSeachParams) {
           vector,
           limit: k,
           with_payload: true,
-          score_threshold: 0.4,
+          // score_threshold: 0.2,
         });
       } catch (error) {
         console.error('Error searching image collection:', error);
@@ -68,18 +68,18 @@ async function kb_search({query, k = 10}: KbSeachParams) {
   // .slice(0, normalizedK);
 
   // Format results
-  return combinedResults.map((r: any) => ({
+  return JSON.stringify(combinedResults.map((r: any) => ({
     type: r.collection,
     title: r.payload?.header || r.payload?.file_name,
-    url: r.collection === TEXT_COLLECTION ?
-      r.payload?.file_path :
+    url: r.collection === 'text' ?
+      r.payload?.reference_url :
       r.payload?.file_path.replace('/Users/hungcq/projects/knowledge-repo', 'https://raw.githubusercontent.com/hungcq/knowledge-repo/refs/heads/master'),
     snippet: r.collection === 'text'
       ? String(r.payload?.content || '').slice(0, 1200)
       : r.payload?.section_header || '',
     score: r.score,
     mimeType: r.payload?.mime_type,
-  }));
+  })), null, 2);
 }
 
 export const kbSearchToolDefinition = {

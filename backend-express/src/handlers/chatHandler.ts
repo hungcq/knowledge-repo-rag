@@ -1,15 +1,14 @@
-import { Socket } from 'socket.io';
-import { run } from '@openai/agents';
+import {Socket} from 'socket.io';
+import {run} from '@openai/agents';
 import {
-  openai,
   prisma,
   RECENT_MESSAGE_LIMIT,
   SUMMARY_THRESHOLD_MESSAGES,
   SUMMARY_REFRESH_INTERVAL,
-  SUMMARY_CONTEXT_MESSAGE_LIMIT,
-  CHAT_MODEL,
+  SUMMARY_CONTEXT_MESSAGE_LIMIT, CHAT_MODEL, openai,
 } from '../config/index.js';
-import { routingAgent, knowledgeAgent } from '../agents/routingAgent.js';
+import {routingAgent} from '../agents/routingAgent.js';
+import {GeminiKnowledgeAgent} from "../agents/geminiKnowledgeAgent.js";
 
 interface Message {
   role: string;
@@ -103,8 +102,8 @@ async function updateSessionSummary(
     }
 
     const contextMessages = await prisma.message.findMany({
-      where: { session_id: sessionId },
-      orderBy: { idx: 'desc' },
+      where: {session_id: sessionId},
+      orderBy: {idx: 'desc'},
       take: SUMMARY_CONTEXT_MESSAGE_LIMIT,
     });
 
@@ -133,7 +132,7 @@ async function updateSessionSummary(
 
     if (summary) {
       await prisma.session.update({
-        where: { id: sessionId },
+        where: {id: sessionId},
         data: {
           summary,
           summary_updated_at: new Date(),
@@ -179,25 +178,25 @@ async function handleUserMessage(
       },
     }),
     prisma.message.count({
-      where: { session_id: sessionId },
+      where: {session_id: sessionId},
     }),
   ]);
 
   // Update session timestamp
   await prisma.session.update({
-    where: { id: sessionId },
-    data: { updated_at: new Date() },
+    where: {id: sessionId},
+    data: {updated_at: new Date()},
   });
 
   // Load session state and history
   const [sessionState, previousMessages] = await Promise.all([
     prisma.session.findUnique({
-      where: { id: sessionId },
-      select: { summary: true },
+      where: {id: sessionId},
+      select: {summary: true},
     }),
     prisma.message.findMany({
-      where: { session_id: sessionId },
-      orderBy: { idx: 'desc' },
+      where: {session_id: sessionId},
+      orderBy: {idx: 'desc'},
       take: RECENT_MESSAGE_LIMIT,
     }),
   ]);
@@ -208,15 +207,31 @@ async function handleUserMessage(
   const history = buildMessageHistory(previousMessages);
   const input = formatInputWithHistory(history, message);
 
-  // Run routing agent with session context and handle handoffs
-  let result = await run(userId === process.env.SECRET_USER_ID ? routingAgent : knowledgeAgent, input, {
-    stream: true,
-    context: {
-      summary: sessionState?.summary || null,
-    },
-  });
+  let assistantResponse = '';
 
-  const assistantResponse = await streamAgentResponse(result, socket);
+  if (userId === process.env.SECRET_USER_ID) {
+    // Run routing agent with session context and handle handoffs
+    let result = await run(routingAgent, input, {
+      stream: true,
+      context: {
+        summary: sessionState?.summary || null,
+      },
+    });
+    assistantResponse = await streamAgentResponse(result, socket);
+  } else {
+    const agent = new GeminiKnowledgeAgent({summary: sessionState?.summary || null});
+    // const res = await agent.chat(input);
+    // socket.emit('message_stream', res)
+    // assistantResponse = res;
+    const stream = agent.chatStream(input)
+
+    for await (const event of stream) {
+      socket.emit('message_stream', event);
+      assistantResponse += event;
+    }
+
+    socket.emit('message_done');
+  }
 
   // Save assistant response
   if (assistantResponse.length > 0) {
@@ -233,8 +248,8 @@ async function handleUserMessage(
   if (messageCount === 1) {
     const title = await generateSessionTitle(message, assistantResponse);
     await prisma.session.update({
-      where: { id: sessionId },
-      data: { title },
+      where: {id: sessionId},
+      data: {title},
     });
 
     socket.emit('session_title_updated', {
@@ -266,7 +281,7 @@ export function setupChatHandler(socket: Socket): void {
     try {
       currentSessionId = await initializeSession(data.userId, data.sessionId);
 
-      socket.emit('session_initialized', { sessionId: currentSessionId });
+      socket.emit('session_initialized', {sessionId: currentSessionId});
       socket.emit('sessions_updated', {
         userId: currentUserId,
         action: 'session_created',

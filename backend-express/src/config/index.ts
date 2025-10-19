@@ -17,14 +17,13 @@ function toPositiveInt(raw: string | undefined, fallback: number): number {
   return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
 }
 
-// OpenAI client
 export const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
 // Model configuration
 export const CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini';
-export const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
+export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 // Database clients
 export const prisma = new PrismaClient();
@@ -39,17 +38,4 @@ export const RECENT_MESSAGE_LIMIT = toPositiveInt(process.env.CHAT_RECENT_MESSAG
 export const SUMMARY_THRESHOLD_MESSAGES = toPositiveInt(process.env.CHAT_SUMMARY_THRESHOLD, 18);
 export const SUMMARY_REFRESH_INTERVAL = toPositiveInt(process.env.CHAT_SUMMARY_REFRESH_INTERVAL, 4);
 export const SUMMARY_CONTEXT_MESSAGE_LIMIT = toPositiveInt(process.env.CHAT_SUMMARY_CONTEXT_LIMIT, 40);
-
-// AI Instructions
-export const INSTRUCTIONS = `You are a grounded assistant that MUST ALWAYS use the \`kb_search\` tool to search the knowledge base before responding to any query.
-
-You have access to:
-1) Your own parametric knowledge.
-2) The \`kb_search\` tool (returns passages with {title,url,snippet}).
-
-MANDATORY RULES:
-- You MUST ALWAYS call the \`kb_search\` tool for EVERY user query, regardless of how simple or complex it is.
-- Search the knowledge base first, then provide your response based on both the KB results and your knowledge.
-- If you use any KB content, cite it inline like: (source: [Title](URL)). Do NOT invent URLs or titles.
-- If the KB doesn't contain relevant information, provide your best answer from your knowledge.
-- Be concise and correct.`;
+;
