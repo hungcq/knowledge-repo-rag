@@ -5,10 +5,12 @@ import {
   RECENT_MESSAGE_LIMIT,
   SUMMARY_THRESHOLD_MESSAGES,
   SUMMARY_REFRESH_INTERVAL,
-  SUMMARY_CONTEXT_MESSAGE_LIMIT, CHAT_MODEL, openai,
+  SUMMARY_CONTEXT_MESSAGE_LIMIT, CHAT_MODEL, GEMINI_MODEL,
 } from '../config/index.js';
 import {routingAgent} from '../agents/routingAgent.js';
 import {GeminiKnowledgeAgent} from "../agents/geminiKnowledgeAgent.js";
+import {ChatGoogleGenerativeAI} from "@langchain/google-genai";
+import {AIMessage, BaseMessage, HumanMessage, SystemMessage} from "@langchain/core/messages";
 
 interface Message {
   role: string;
@@ -54,28 +56,25 @@ async function generateSessionTitle(
   assistantResponse: string,
 ): Promise<string> {
   try {
-    const response = await openai.chat.completions.create({
-      model: CHAT_MODEL,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Generate a short, descriptive title (max 8 words) for this chat conversation. Return only the title, nothing else.',
-        },
-        {
-          role: 'user', content: `Below are the content of the conversation: 
+    const response = await llm.invoke(
+      [
+        new SystemMessage('Generate a short, descriptive title (max 8 words) for this chat conversation. Return only the title, nothing else.'),
+        new HumanMessage(`Below are the content of the conversation: 
           User: ${userMessage}\n\n
-          Assistant: ${assistantResponse}`
-        },
+          Assistant: ${assistantResponse}`),
       ],
-    });
+    );
 
-    return response.choices[0]?.message?.content?.trim() || 'New Chat';
+    return response.content as string || 'New Chat';
   } catch (error) {
     console.error('Error generating title:', error);
     return 'New Chat';
   }
 }
+
+const llm = new ChatGoogleGenerativeAI({
+  model: GEMINI_MODEL,
+});
 
 async function updateSessionSummary(
   sessionId: string,
@@ -83,23 +82,14 @@ async function updateSessionSummary(
   latestResponse: string,
 ): Promise<void> {
   try {
-    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
-      {
-        role: 'system',
-        content: `You are maintaining a running summary of a conversation between a user and an assistant.
+    const messages: BaseMessage[] = [
+      new SystemMessage(`You are maintaining a running summary of a conversation between a user and an assistant.
 
         Given the new assistant reply and recent messages, produce a concise summary (max 10 sentences) that captures key context, decisions, and follow-ups. This summary will be used to provide context for future turns.
 
-        Return plain text only.`,
-      },
+        Return plain text only.`),
+      new SystemMessage(`Existing summary:\n${existingSummary}`),
     ];
-
-    if (existingSummary) {
-      messages.push({
-        role: 'system',
-        content: `Existing summary:\n${existingSummary}`,
-      });
-    }
 
     const contextMessages = await prisma.message.findMany({
       where: {session_id: sessionId},
@@ -110,31 +100,23 @@ async function updateSessionSummary(
     contextMessages.reverse();
 
     for (const msg of contextMessages) {
-      if (msg.role === 'user' || msg.role === 'assistant') {
-        messages.push({
-          role: msg.role,
-          content: msg.content,
-        });
+      if (msg.role === 'user') {
+        messages.push(new HumanMessage(msg.content))
+      } else {
+        messages.push(new AIMessage(msg.content))
       }
     }
 
-    messages.push({
-      role: 'assistant',
-      content: latestResponse,
-    });
+    messages.push(new AIMessage(latestResponse))
 
-    const response = await openai.chat.completions.create({
-      model: CHAT_MODEL,
-      messages,
-    });
+    const aiMes = await llm.invoke(messages);
+    const res = aiMes.content as string;
 
-    const summary = response.choices[0]?.message?.content?.trim();
-
-    if (summary) {
+    if (res) {
       await prisma.session.update({
         where: {id: sessionId},
         data: {
-          summary,
+          summary: res.trim(),
           summary_updated_at: new Date(),
         },
       });

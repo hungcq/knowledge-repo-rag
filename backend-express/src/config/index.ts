@@ -1,7 +1,6 @@
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { QdrantClient } from '@qdrant/js-client-rest';
-import OpenAI from 'openai';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -16,10 +15,6 @@ function toPositiveInt(raw: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(raw ?? '', 10);
   return Number.isNaN(parsed) || parsed <= 0 ? fallback : parsed;
 }
-
-export const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 // Model configuration
 export const CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini';
